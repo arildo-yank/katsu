@@ -17,12 +17,12 @@ Por isso `Sgd::step` não altera parâmetros no lugar: devolve **novas folhas**
 use katsu_core::{fit, Sgd, Tensor, TensorError};
 
 fn main() -> Result<(), TensorError> {
-    // y = 2x + 1; o bias entra como uma coluna de uns (não há broadcasting).
+    // y = 2x + 1; o bias entra como uma coluna de uns.
     let x = Tensor::new(vec![-1., 1., 0., 1., 1., 1.], &[3, 2])?;
     let neg_y = Tensor::new(vec![1., -1., -3.], &[3, 1])?;
     let params = fit(
         vec![Tensor::zeros(&[2, 1])?],
-        &Sgd::new(0.1)?,
+        &mut Sgd::new(0.1)?,
         200,
         |p| {
             let r = x.matmul(&p[0])?.add(&neg_y)?;
@@ -68,5 +68,6 @@ Sem argumento, as linhas vão para stdout e o resumo final vai para stderr.
 
 ## Limites atuais
 
-Taxa de aprendizado fixa, sem momentum, Adam, mini-batches ou agendamento de lr.
+`fit` aceita qualquer `Optimizer`: `&mut Sgd::new(lr)?` ou `&mut Adam::new(lr)?`.
+Taxa de aprendizado fixa, sem mini-batches, agendamento de lr ou gradient clipping.
 O treino roda no processo do chamador, em uma thread; não há servidor HTTP.

@@ -31,7 +31,7 @@ fn addition_preserves_inputs() -> Result<(), TensorError> {
     assert_eq!(a.add(&b)?.data(), &[4.0, 6.0]);
     assert_eq!(a.data(), &[1.0, 2.0]);
     assert!(matches!(
-        a.add(&Tensor::zeros(&[1, 2])?),
+        a.add(&Tensor::zeros(&[3])?),
         Err(TensorError::ShapeMismatch)
     ));
     Ok(())

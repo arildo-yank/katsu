@@ -26,6 +26,27 @@ documentação ou estrutura de pastas, isoladamente, não tornam uma funcionalid
 Critério: o teste de integração executa múltiplos passos e demonstra redução da
 perda dentro de tolerâncias documentadas. Ter backward não basta para concluir este marco.
 
+## 1b. Peças do transformer
+
+- [x] Broadcasting em add/mul com gradientes reduzidos nas dimensões expandidas.
+- [x] transpose, reshape, softmax, log_softmax, LayerNorm, GELU e máscara causal.
+- [x] cross_entropy, one_hot e Adam.
+- [x] Bloco de atenção causal com gradientes verificados por diferenças finitas.
+
+## Rumo à base da IA Arandu
+
+Crescimento gradual, cada etapa com algo demonstrável:
+
+1. **Katsu fala português**: GPT de caracteres com alguns milhões de parâmetros,
+   treinado no Mac com textos brasileiros em domínio público, loss ao vivo no monitor arandu.
+2. **Desempenho**: matmul blocado/SIMD, threads (`Arc` + `rayon`), f16 e quantização int8.
+3. **Inferência de pesos abertos**: carregar safetensors e gerar texto no chat do Arandu.
+4. **Escala em GPU alugada**: backend GPU e modelos de centenas de milhões a bilhões de parâmetros.
+5. **Atribuição por token** no modelo próprio: explicabilidade real das respostas.
+
+Ordem de grandeza: 1 bilhão de parâmetros em f16 ocupa ~2 GB; 1 trilhão, ~2 TB e
+milhares de GPUs para treinar. Escalas acima de bilhões dependem de investimento.
+
 ## 2. Interface Python
 
 - [ ] Expor Tensor e operações com PyO3.

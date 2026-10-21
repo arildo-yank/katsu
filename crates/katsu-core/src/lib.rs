@@ -7,5 +7,8 @@ pub use tensor::{Op, Tensor, TensorError};
 mod conv2d;
 pub use conv2d::Conv2D;
 
+mod ops;
+pub use ops::LAYER_NORM_EPS;
+
 mod optim;
-pub use optim::{fit, EpochMetrics, Sgd};
+pub use optim::{fit, Adam, EpochMetrics, Optimizer, Sgd};

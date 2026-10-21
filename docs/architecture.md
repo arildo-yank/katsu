@@ -37,8 +37,8 @@ definir como atualizar parâmetros entre grafos sem invalidar grafos anteriores.
 ## Execução e memória
 
 Dados em `f32`, CPU e ordem row-major. Matmul e convolução são kernels diretos,
-sequenciais, sem BLAS, GPU ou SIMD explícito. Não há broadcasting, views ou strides
-customizados de armazenamento.
+sequenciais, sem BLAS, GPU ou SIMD explícito. Broadcasting usa um mapa de índices
+por operação; não há views ou strides de armazenamento (transpose e reshape copiam).
 
 O crate declara `#![forbid(unsafe_code)]`. Buffers numéricos usam reserva falível;
 Rc, vetores de pais e estruturas auxiliares do grafo usam alocação padrão. Não há

@@ -34,6 +34,12 @@ pub enum TensorError {
     NonFiniteLoss {
         epoch: usize,
     },
+    InvalidShape(&'static str),
+    IndexOutOfRange {
+        index: usize,
+        classes: usize,
+    },
+    OptimizerState,
 }
 
 impl fmt::Display for TensorError {
@@ -53,10 +59,7 @@ impl fmt::Display for TensorError {
                 write!(f, "expected {expected} elements, got {actual}")
             }
             Self::ShapeMismatch => {
-                write!(
-                    f,
-                    "elementwise operations require identical shapes (no broadcasting)"
-                )
+                write!(f, "elementwise shapes are not broadcast-compatible")
             }
             Self::RankMismatch { left, right } => {
                 write!(f, "matmul requires rank 2, got {left} and {right}")
@@ -77,6 +80,13 @@ impl fmt::Display for TensorError {
             }
             Self::NonFiniteLoss { epoch } => {
                 write!(f, "loss is NaN or infinite at epoch {epoch}")
+            }
+            Self::InvalidShape(message) => write!(f, "invalid shape: {message}"),
+            Self::IndexOutOfRange { index, classes } => {
+                write!(f, "class index {index} out of range for {classes} classes")
+            }
+            Self::OptimizerState => {
+                write!(f, "parameters do not match the optimizer state")
             }
         }
     }
@@ -107,6 +117,12 @@ pub enum Op {
     Conv2D { stride: usize, padding: usize },
     Sum,
     Relu,
+    Transpose,
+    Reshape,
+    Gelu,
+    Softmax,
+    LogSoftmax,
+    LayerNorm,
 }
 
 /// Handle compartilhado: clone preserva a identidade do nó, sem copiar os dados.
@@ -267,20 +283,18 @@ impl Tensor {
         self.elementwise(rhs, Op::Mul)
     }
 
+    /// Shapes compatíveis por broadcasting (regras do NumPy).
     fn elementwise(&self, rhs: &Self, op: Op) -> Result<Self, TensorError> {
-        if self.shape() != rhs.shape() {
-            return Err(TensorError::ShapeMismatch);
-        }
-        let mut data = zeros_buffer(self.numel())?;
-        for ((out, a), b) in data.iter_mut().zip(self.data()).zip(rhs.data()) {
+        let shape = crate::ops::broadcast_shape(self.shape(), rhs.shape())?;
+        let left = crate::ops::broadcast_map(&shape, self.shape())?;
+        let right = crate::ops::broadcast_map(&shape, rhs.shape())?;
+        let mut data = zeros_buffer(element_count(&shape)?)?;
+        for (i, out) in data.iter_mut().enumerate() {
+            let a = self.data()[crate::ops::at(&left, i)];
+            let b = rhs.data()[crate::ops::at(&right, i)];
             *out = if op == Op::Add { a + b } else { a * b };
         }
-        Ok(Self::node(
-            data,
-            copy_shape(self.shape())?,
-            op,
-            vec![self.clone(), rhs.clone()],
-        ))
+        Ok(Self::node(data, shape, op, vec![self.clone(), rhs.clone()]))
     }
 
     /// max(0, x) elemento a elemento. A derivada em x = 0 é definida como 0.
@@ -465,16 +479,29 @@ impl Op {
                 for side in 0..2 {
                     let parent = &node.parents()[side];
                     let other = &node.parents()[1 - side];
+                    // Dimensões expandidas somam as contribuições no mesmo índice.
+                    let to_parent = crate::ops::broadcast_map(node.shape(), parent.shape())?;
+                    let to_other = crate::ops::broadcast_map(node.shape(), other.shape())?;
                     let target = adjoint(pending, parent)?;
-                    for (index, (out, grad)) in target.iter_mut().zip(g).enumerate() {
+                    for (index, grad) in g.iter().enumerate() {
                         // Add: d(a+b)/da = 1. Mul: d(a*b)/da = b.
-                        *out += if self == Self::Add {
+                        target[crate::ops::at(&to_parent, index)] += if self == Self::Add {
                             *grad
                         } else {
-                            grad * other.data()[index]
+                            grad * other.data()[crate::ops::at(&to_other, index)]
                         };
                     }
                 }
+            }
+            Self::Transpose
+            | Self::Reshape
+            | Self::Gelu
+            | Self::Softmax
+            | Self::LogSoftmax
+            | Self::LayerNorm => {
+                let parent = &node.parents()[0];
+                let target = adjoint(pending, parent)?;
+                crate::ops::unary_backward(self, parent, node, g, target);
             }
             Self::Relu => {
                 let parent = &node.parents()[0];

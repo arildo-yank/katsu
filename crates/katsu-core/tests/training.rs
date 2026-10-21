@@ -59,7 +59,7 @@ fn fit_learns_linear_regression_and_reports_metrics() -> Result<(), TensorError>
     let mut history = Vec::new();
     let params = fit(
         vec![Tensor::zeros(&[2, 1])?],
-        &Sgd::new(0.1)?,
+        &mut Sgd::new(0.1)?,
         300,
         |p| mse(p, &x, &neg_y, &inv_n),
         |m| history.push(*m),
@@ -86,7 +86,7 @@ fn fit_stops_on_divergence() -> Result<(), TensorError> {
     let mut emitted = 0;
     let result = fit(
         vec![Tensor::zeros(&[2, 1])?],
-        &Sgd::new(1e6)?,
+        &mut Sgd::new(1e6)?,
         100,
         |p| mse(p, &x, &neg_y, &inv_n),
         |_| emitted += 1,

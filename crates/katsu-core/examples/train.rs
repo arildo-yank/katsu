@@ -23,7 +23,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut write_error = None;
     let params = fit(
         vec![Tensor::zeros(&[2, 1])?],
-        &Sgd::new(0.1)?,
+        &mut Sgd::new(0.1)?,
         200,
         |p| {
             let residual = x.matmul(&p[0])?.add(&neg_y)?;

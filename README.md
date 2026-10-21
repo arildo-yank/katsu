@@ -10,8 +10,8 @@ Katsu combina tensores CPU `f32`, diferenciação automática reversa e Conv2D e
 core sem dependências externas. A explicabilidade é uma direção do projeto:
 ativações e gradientes já estão disponíveis; Grad-CAM ainda está no roadmap.
 
-> **Prévia técnica · 0.1.0 · MIT.** Há SGD e um loop de treino mínimo; ainda não há
-> Adam, mini-batches ou classe Tensor em Python. A API pode mudar. Não foram medidos ganhos sobre PyTorch.
+> **Prévia técnica · 0.1.0 · MIT.** Há SGD, Adam, broadcasting e as peças de um
+> transformer; ainda não há mini-batches, GPU ou classe Tensor em Python. A API pode mudar. Não foram medidos ganhos sobre PyTorch.
 
 ## Comece pelo código que funciona
 
@@ -49,12 +49,13 @@ O [arquivo executável](crates/katsu-core/examples/autograd.rs) também imprime 
 
 | Área | Implementado | Ainda não implementado |
 | --- | --- | --- |
-| Tensor | `new`, `zeros`, `add`, `mul`, `matmul`, `sum` | Broadcasting, views, outros dtypes |
+| Tensor | `add`/`mul` com broadcasting, `matmul`, `sum`, `transpose`, `reshape` | Views sem cópia, matmul em lote, outros dtypes |
+| Transformer | `softmax`, `log_softmax`, `layer_norm`, `gelu`, `relu`, `causal_mask`, `one_hot`, `cross_entropy` | Atenção multi-cabeça, dropout, embeddings treináveis dedicados |
 | Autograd | Grafo dinâmico, VJP, acumulação, `zero_grad`, `retain_grad` | `requires_grad`, detach, derivadas superiores |
 | Visão | Conv2D NCHW, stride, padding, dX e dW | Bias, groups, dilation, pooling |
 | Explicabilidade | Acesso às ativações e seus gradientes | Grad-CAM e heatmaps |
 | Python | Estrutura PyO3/Maturin; módulo de versão | `katsu.Tensor`, wheels publicados |
-| Treinamento | SGD, loop `fit`, ReLU, métricas JSON por época ([guia](docs/training.md)) | Adam, momentum, mini-batches, agendamento de lr |
+| Treinamento | SGD, Adam, loop `fit`, métricas JSON por época ([guia](docs/training.md)) | Mini-batches, agendamento de lr, gradient clipping |
 | Execução | CPU, single-thread, Rust seguro | GPU, paralelismo, backend HTTP |
 
 ## Do pixel ao gradiente
@@ -101,7 +102,7 @@ single-thread cujo limite de escala está documentado em [arquitetura](docs/arch
 
 ## Validação e licença
 
-Há **27 testes de integração** do core: 6 de Tensor, 8 de Autograd, 7 de Conv2D e 6 de Treinamento.
+Há **38 testes de integração** do core: 6 de Tensor, 8 de Autograd, 7 de Conv2D, 6 de Treinamento e 11 de operações de transformer (incluindo um bloco de atenção causal verificado por diferenças finitas).
 A verificação local via `rustc` passou, incluindo diferenças finitas. O workflow
 [GitHub Actions](.github/workflows/ci.yml) está configurado; sua execução remota
 não foi verificada. O workspace Python completo ainda não foi validado.

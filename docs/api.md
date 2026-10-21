@@ -30,11 +30,21 @@ cópia independente. Shape e dados são privados, acessíveis por slices imutáv
 | `grad()` | `Result<Ref<'_, Option<Vec<f32>>>>` | Guard de leitura; inicialmente None |
 | `zero_grad()` | `Result<()>` | Define grad deste nó como None |
 | `relu()` | `Result<Tensor>` | max(0, x); derivada 0 em x ≤ 0 |
+| `gelu()` | `Result<Tensor>` | GELU com aproximação tanh |
+| `transpose()` | `Result<Tensor>` | Somente rank 2; copia os dados |
+| `reshape(shape)` | `Result<Tensor>` | Mesma quantidade de elementos |
+| `softmax()` / `log_softmax()` | `Result<Tensor>` | Última dimensão, estáveis numericamente |
+| `layer_norm()` | `Result<Tensor>` | Média 0 e variância 1 na última dimensão; eps `LAYER_NORM_EPS` = 1e-5; sem escala/bias |
+| `cross_entropy(targets: &[usize])` | `Result<Tensor>` | Média sobre logits `[n, classes]` |
+| `Tensor::scalar(v)` | `Result<Tensor>` | Shape `[]` |
+| `Tensor::one_hot(indices, classes)` | `Result<Tensor>` | `[n, classes]` constante |
+| `Tensor::causal_mask(t)` | `Result<Tensor>` | `[t, t]` com -inf acima da diagonal |
 | `retain_grad()` | `()` | Faz backward publicar o grad deste intermediário |
 | `retains_grad()` | `bool` | Verdadeiro para folhas e nós com `retain_grad` |
 
 Shape `[]` exige um elemento. Shape com alguma dimensão zero produz tensor vazio.
-Operações não fazem broadcasting. NaN/Inf seguem aritmética f32 e não são rejeitados.
+`add` e `mul` fazem broadcasting pelas regras do NumPy (alinhado à direita;
+dimensão 1 ou ausente se expande). NaN/Inf seguem aritmética f32 e não são rejeitados.
 Todos os operandos são registrados; não existe flag `requires_grad`.
 Backward publica `grad` só em folhas e em nós marcados com `retain_grad()`;
 a saída de `Conv2D::forward` já vem marcada.
@@ -48,13 +58,16 @@ Detalhes e contrato JSON em [Treinamento](training.md).
 | --- | --- | --- |
 | `Sgd::new(learning_rate: f32)` | `Result<Sgd>` | Taxa finita e positiva, senão `InvalidLearningRate` |
 | `Sgd::step(params: &[Tensor])` | `Result<Vec<Tensor>>` | Novas folhas `p - lr*grad`; `MissingGradient { index }` se faltar grad |
-| `fit(params, &sgd, epochs, loss_fn, on_epoch)` | `Result<Vec<Tensor>>` | Loop de SGD; `NonFiniteLoss { epoch }` em NaN/Inf |
+| `Adam::new(lr)` / `Adam::with_betas(lr, b1, b2, eps)` | `Result<Adam>` | Adam com correção de viés; guarda momentos por parâmetro |
+| `Optimizer` (trait) | `step(&mut self, params)`, `learning_rate()` | Implementado por `Sgd` e `Adam` |
+| `fit(params, &mut optimizer, epochs, loss_fn, on_epoch)` | `Result<Vec<Tensor>>` | Loop de SGD; `NonFiniteLoss { epoch }` em NaN/Inf |
 | `EpochMetrics { epoch, loss, learning_rate }` | `Display` | Uma linha JSON por época |
 
 ## Op
 
 Enum público com `Debug`, `Clone`, `Copy`, `PartialEq` e `Eq`:
-`Leaf`, `Add`, `Mul`, `Matmul`, `Sum`, `Relu`, `Conv2D { stride: usize, padding: usize }`.
+`Leaf`, `Add`, `Mul`, `Matmul`, `Sum`, `Relu`, `Transpose`, `Reshape`, `Gelu`, `Softmax`,
+`LogSoftmax`, `LayerNorm`, `Conv2D { stride: usize, padding: usize }`.
 
 O método que aplica as derivadas locais é interno. O usuário inspeciona `op()` e
 `parents()`, mas não injeta operações ou modifica o grafo. Conv2D registra os pais
@@ -96,7 +109,10 @@ Implementa `Debug`, `Display` e `std::error::Error`.
 | `NonScalarBackward` | `backward()` chamado em saída com numel diferente de 1 |
 | `GradientBorrowed` | Gradiente ainda emprestado quando seria alterado |
 | `DataLength { expected, actual }` | Dados ou seed com quantidade incorreta |
-| `ShapeMismatch` | Operação elemento a elemento com shapes distintos |
+| `ShapeMismatch` | Shapes incompatíveis para broadcasting |
+| `InvalidShape(&str)` | Rank ou forma inválida para a operação |
+| `IndexOutOfRange { index, classes }` | Classe fora do intervalo em one_hot/cross_entropy |
+| `OptimizerState` | Parâmetros diferentes dos que o Adam já viu |
 | `RankMismatch { left, right }` | Matmul com rank diferente de 2 |
 | `MatmulMismatch { left_columns, right_rows }` | Dimensões internas incompatíveis |
 | `Allocation(TryReserveError)` | Reserva falível de buffer não pôde ser atendida |
