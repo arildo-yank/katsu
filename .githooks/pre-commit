@@ -1,0 +1,6 @@
+#!/bin/sh
+# Mesmas verificações do CI do core. Ative com: git config core.hooksPath .githooks
+set -e
+cargo fmt --all -- --check
+cargo clippy -p katsu-core --all-targets --quiet -- -D warnings
+cargo test -p katsu-core --quiet

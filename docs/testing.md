@@ -46,7 +46,7 @@ de prosseguir. Essa alternativa valida o core, não o empacotamento Cargo/PyO3.
 | Suíte | Testes | Casos |
 | --- | --- | --- |
 | [Tensor](../crates/katsu-core/tests/tensor.rs) | 6 | Shapes, overflow, soma, matmul, escalares e vazios |
-| [Autograd](../crates/katsu-core/tests/autograd.rs) | 6 | Nós compartilhados, seeds, acumulação, borrows e diferenças finitas |
+| [Autograd](../crates/katsu-core/tests/autograd.rs) | 8 | Nós compartilhados, seeds, acumulação, borrows, retain_grad, grafo profundo e diferenças finitas |
 | [Conv2D](../crates/katsu-core/tests/conv2d.rs) | 7 | Forward conhecido, padding/stride, dX/dW, cache, batch e inicialização |
 
 As diferenças finitas da Conv2D perturbam entradas e pesos, com batch > 1,
@@ -56,7 +56,7 @@ Os testes usam tolerâncias para f32; não prometem igualdade bit a bit entre pl
 
 ## Evidência disponível
 
-19 testes locais passaram via rustc. O core passou pelo clippy-driver sem avisos;
+21 testes locais passaram via Cargo. O core passou pelo clippy-driver sem avisos;
 o exemplo RGB 224×224 executou em build otimizado. Isso não equivale a benchmark.
 A execução remota do GitHub Actions e o build Python completo ainda não foram
 verificados. Não há medição comparativa com PyTorch.

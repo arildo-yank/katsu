@@ -29,10 +29,14 @@ cópia independente. Shape e dados são privados, acessíveis por slices imutáv
 | `backward_with(seed: &[f32])` | `Result<()>` | VJP com seed achatado do tamanho da saída |
 | `grad()` | `Result<Ref<'_, Option<Vec<f32>>>>` | Guard de leitura; inicialmente None |
 | `zero_grad()` | `Result<()>` | Define grad deste nó como None |
+| `retain_grad()` | `()` | Faz backward publicar o grad deste intermediário |
+| `retains_grad()` | `bool` | Verdadeiro para folhas e nós com `retain_grad` |
 
 Shape `[]` exige um elemento. Shape com alguma dimensão zero produz tensor vazio.
 Operações não fazem broadcasting. NaN/Inf seguem aritmética f32 e não são rejeitados.
 Todos os operandos são registrados; não existe flag `requires_grad`.
+Backward publica `grad` só em folhas e em nós marcados com `retain_grad()`;
+a saída de `Conv2D::forward` já vem marcada.
 Libere o guard de grad antes de chamar backward ou zero_grad.
 
 ## Op
