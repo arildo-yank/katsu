@@ -49,7 +49,7 @@ O [arquivo executável](crates/katsu-core/examples/autograd.rs) também imprime 
 | Área | Implementado | Ainda não implementado |
 | --- | --- | --- |
 | Tensor | `new`, `zeros`, `add`, `mul`, `matmul`, `sum` | Broadcasting, views, outros dtypes |
-| Autograd | Grafo dinâmico, VJP, acumulação, `zero_grad` | `requires_grad`, detach, derivadas superiores |
+| Autograd | Grafo dinâmico, VJP, acumulação, `zero_grad`, `retain_grad` | `requires_grad`, detach, derivadas superiores |
 | Visão | Conv2D NCHW, stride, padding, dX e dW | Bias, groups, dilation, pooling |
 | Explicabilidade | Acesso às ativações e seus gradientes | Grad-CAM e heatmaps |
 | Python | Estrutura PyO3/Maturin; módulo de versão | `katsu.Tensor`, wheels publicados |
@@ -88,9 +88,18 @@ não é `Send`/`Sync`. Leia a [arquitetura e os limites](docs/architecture.md).
 | [Contribuição](CONTRIBUTING.md) | Como propor mudanças e validar kernels |
 | [Histórico](CHANGELOG.md) | Mudanças ainda não publicadas |
 
+## Escopo de produção
+
+Katsu é uma biblioteca, não um serviço. Por isso não se aplicam: interface web,
+banco de dados, autenticação, deploy com proxy/HTTPS, rate limiting, cache/CDN,
+backup e endpoint de métricas. Se um backend HTTP for criado (roadmap), essas
+camadas passam a valer. O que se aplica: testes automatizados, CI, hook local
+(`.githooks`), dependências fixadas em `Cargo.lock`, erros tipados e um motor
+single-thread cujo limite de escala está documentado em [arquitetura](docs/architecture.md).
+
 ## Validação e licença
 
-Há **19 testes de integração** do core: 6 de Tensor, 6 de Autograd e 7 de Conv2D.
+Há **21 testes de integração** do core: 6 de Tensor, 8 de Autograd e 7 de Conv2D.
 A verificação local via `rustc` passou, incluindo diferenças finitas. O workflow
 [GitHub Actions](.github/workflows/ci.yml) está configurado; sua execução remota
 não foi verificada. O workspace Python completo ainda não foi validado.

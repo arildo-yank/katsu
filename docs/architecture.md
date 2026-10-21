@@ -45,9 +45,8 @@ Rc, vetores de pais e estruturas auxiliares do grafo usam alocação padrão. N�
 garantia de recuperar qualquer falta de memória; alocações do chamador também
 estão fora do tratamento do core.
 
-O grafo usa Rc/RefCell e não é Send/Sync. A travessia backward é iterativa, mas a
-destruição padrão de cadeias Rc muito profundas ainda pode consumir a pilha.
-Uma arena ou liberação iterativa pode ser necessária para grafos extremos.
+O grafo usa Rc/RefCell e não é Send/Sync. A travessia backward e a destruição
+do grafo são iterativas: cadeias com centenas de milhares de nós não estouram a pilha.
 
 ## Integração futura
 

@@ -19,6 +19,12 @@ cargo test -p katsu-core
 cargo clippy -p katsu-core --all-targets -- -D warnings
 ```
 
+Para rodar essas verificações a cada commit, ative o hook versionado:
+
+```sh
+git config core.hooksPath .githooks
+```
+
 Para alterações em Conv2D, execute também o exemplo em release. Se as dependências
 não puderem ser resolvidas, use a [validação offline](docs/testing.md) e informe
 exatamente o que foi e não foi validado. Não adicione dependências ao core sem

@@ -9,6 +9,7 @@ fn squared_error_shared_nodes_and_repeated_backward() -> Result<(), TensorError>
     let a = Tensor::new(vec![1., 2.], &[2])?;
     let b = Tensor::new(vec![3., 4.], &[2])?;
     let s = a.add(&b)?;
+    s.retain_grad();
     let loss = s.mul(&s)?.sum()?;
     assert_eq!(s.op(), Op::Add);
     assert_eq!(s.parents().len(), 2);
@@ -32,6 +33,7 @@ fn diamond_and_clone_identity() -> Result<(), TensorError> {
     let x = Tensor::new(vec![2.], &[])?;
     let alias = x.clone();
     let square = x.mul(&alias)?;
+    square.retain_grad();
     square.add(&square.mul(&x)?)?.backward()?; // x² + x³
     assert_eq!(grad(&alias), vec![16.]);
     assert_eq!(grad(&square), vec![3.]);
@@ -112,5 +114,34 @@ fn empty_graph_operations() -> Result<(), TensorError> {
     let x = Tensor::zeros(&[0])?;
     x.mul(&x)?.add(&x)?.sum()?.backward()?;
     assert!(grad(&x).is_empty());
+    Ok(())
+}
+
+#[test]
+fn intermediates_without_retain_grad_stay_empty() -> Result<(), TensorError> {
+    let x = Tensor::new(vec![1., 2.], &[2])?;
+    let y = x.mul(&x)?;
+    let loss = y.sum()?;
+    assert!(x.retains_grad());
+    assert!(!y.retains_grad());
+    loss.backward()?;
+    assert_eq!(grad(&x), vec![2., 4.]);
+    assert!(y.grad()?.is_none());
+    assert!(loss.grad()?.is_none());
+    Ok(())
+}
+
+#[test]
+fn deep_graph_backward_and_drop_do_not_overflow() -> Result<(), TensorError> {
+    let x = Tensor::new(vec![1.], &[])?;
+    let one = Tensor::new(vec![1.], &[])?;
+    let mut y = x.clone();
+    for _ in 0..200_000 {
+        y = y.add(&one)?;
+    }
+    y.backward()?;
+    assert_eq!(grad(&x), vec![1.]);
+    assert_eq!(grad(&one), vec![200_000.]);
+    drop(y); // Drop recursivo estouraria a pilha da thread de teste.
     Ok(())
 }

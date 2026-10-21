@@ -36,7 +36,9 @@ Deduplicar nós não significa deduplicar arestas.
 
 ## Acumulação entre chamadas
 
-O campo `grad` começa em `None`. Backward preenche folhas e intermediários.
+O campo `grad` começa em `None`. Backward preenche as folhas e os intermediários
+marcados com `retain_grad()`. Os demais adjuntos são liberados assim que consumidos,
+o que reduz o pico de memória.
 Uma nova chamada calcula adjuntos do zero e os soma ao campo `grad` existente.
 Os gradientes antigos nunca são usados como seed intermediário.
 

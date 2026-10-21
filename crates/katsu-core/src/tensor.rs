@@ -1,5 +1,5 @@
 use std::{
-    cell::{Ref, RefCell},
+    cell::{Cell, Ref, RefCell},
     collections::{HashMap, HashSet, TryReserveError},
     error::Error,
     fmt,
@@ -102,8 +102,23 @@ struct TensorNode {
     data: Vec<f32>,
     shape: Vec<usize>,
     grad: RefCell<Option<Vec<f32>>>,
+    retain_grad: Cell<bool>,
     parents: Vec<Tensor>,
     op: Op,
+}
+
+/// Desmonta o grafo iterativamente: o drop recursivo padrão estoura a pilha
+/// em cadeias profundas (ex.: centenas de milhares de operações).
+impl Drop for TensorNode {
+    fn drop(&mut self) {
+        let mut stack = std::mem::take(&mut self.parents);
+        while let Some(parent) = stack.pop() {
+            // Só desmonta nós sem outros donos; os demais continuam vivos.
+            if let Ok(mut node) = Rc::try_unwrap(parent.0) {
+                stack.append(&mut node.parents);
+            }
+        }
+    }
 }
 
 impl fmt::Debug for Tensor {
@@ -184,6 +199,7 @@ impl Tensor {
             data,
             shape,
             grad: RefCell::new(None),
+            retain_grad: Cell::new(false),
             parents,
             op,
         }))
@@ -202,6 +218,17 @@ impl Tensor {
             .grad
             .try_borrow()
             .map_err(|_| TensorError::GradientBorrowed)
+    }
+
+    /// Pede que backward publique o gradiente deste nó intermediário.
+    /// Folhas sempre recebem gradiente; intermediários só com retain_grad.
+    pub fn retain_grad(&self) {
+        self.0.retain_grad.set(true);
+    }
+
+    /// Indica se backward publica o gradiente deste nó.
+    pub fn retains_grad(&self) -> bool {
+        self.0.op == Op::Leaf || self.0.retain_grad.get()
     }
 
     /// Limpa apenas este nó. Chamadas backward sucessivas acumulam gradientes.
@@ -315,7 +342,8 @@ impl Tensor {
 
     /// Calcula o VJP com seed no mesmo layout achatado da saída.
     /// Cada chamada usa adjuntos temporários novos: gradientes antigos nunca
-    /// são propagados novamente. Só o resultado final é acumulado em grad.
+    /// são propagados novamente. Só o resultado final é acumulado em grad,
+    /// e apenas em folhas e nós marcados com retain_grad.
     /// Gradientes são buffers numéricos; derivadas de ordem superior não são suportadas.
     pub fn backward_with(&self, seed: &[f32]) -> Result<(), TensorError> {
         if seed.len() != self.numel() {
@@ -325,22 +353,25 @@ impl Tensor {
             });
         }
         let order = self.topological_order();
+        // Adjuntos alocados sob demanda: só existem entre o primeiro filho
+        // processado e o consumo do próprio nó, reduzindo o pico de memória.
         let mut pending = HashMap::new();
-        for node in &order {
-            pending.insert(node.id(), zeros_buffer(node.numel())?);
-        }
-        pending
-            .get_mut(&self.id())
-            .expect("root is in topology")
-            .copy_from_slice(seed);
+        adjoint(&mut pending, self)?.copy_from_slice(seed);
+        let mut retained = Vec::new();
         for node in order.iter().rev() {
-            let upstream = pending.remove(&node.id()).expect("node is in topology");
+            let upstream = match pending.remove(&node.id()) {
+                Some(upstream) => upstream,
+                None => zeros_buffer(node.numel())?,
+            };
             node.op().backward(node, &upstream, &mut pending)?;
-            pending.insert(node.id(), upstream);
+            // Adjuntos de intermediários não retidos são liberados assim que consumidos.
+            if node.retains_grad() {
+                retained.push((node, upstream));
+            }
         }
-        // Pré-valida todos os borrows e aloca antes de modificar qualquer grad.
+        // Pré-valida todos os borrows antes de modificar qualquer grad.
         let mut guards = Vec::new();
-        for node in &order {
+        for (node, _) in &retained {
             guards.push(
                 node.0
                     .grad
@@ -348,8 +379,7 @@ impl Tensor {
                     .map_err(|_| TensorError::GradientBorrowed)?,
             );
         }
-        for (node, mut stored) in order.iter().zip(guards) {
-            let gradient = pending.remove(&node.id()).expect("gradient was computed");
+        for ((_, gradient), mut stored) in retained.into_iter().zip(guards) {
             if let Some(previous) = stored.as_mut() {
                 for (old, new) in previous.iter_mut().zip(gradient) {
                     *old += new;
@@ -360,6 +390,18 @@ impl Tensor {
         }
         Ok(())
     }
+}
+
+/// Buffer de adjunto do nó, criado com zeros na primeira contribuição.
+fn adjoint<'a>(
+    pending: &'a mut HashMap<*const TensorNode, Vec<f32>>,
+    node: &Tensor,
+) -> Result<&'a mut Vec<f32>, TensorError> {
+    use std::collections::hash_map::Entry;
+    Ok(match pending.entry(node.id()) {
+        Entry::Occupied(entry) => entry.into_mut(),
+        Entry::Vacant(entry) => entry.insert(zeros_buffer(node.numel())?),
+    })
 }
 
 impl Op {
@@ -381,9 +423,7 @@ impl Op {
                 )?;
                 // Empréstimos sequenciais também suportam pais com identidade igual.
                 for (parent, gradient) in node.parents().iter().zip([dx, dw]) {
-                    let target = pending
-                        .get_mut(&parent.id())
-                        .expect("parent is in topology");
+                    let target = adjoint(pending, parent)?;
                     for (out, value) in target.iter_mut().zip(gradient) {
                         *out += value;
                     }
@@ -394,9 +434,7 @@ impl Op {
                 for side in 0..2 {
                     let parent = &node.parents()[side];
                     let other = &node.parents()[1 - side];
-                    let target = pending
-                        .get_mut(&parent.id())
-                        .expect("parent is in topology");
+                    let target = adjoint(pending, parent)?;
                     for (index, (out, grad)) in target.iter_mut().zip(g).enumerate() {
                         // Add: d(a+b)/da = 1. Mul: d(a*b)/da = b.
                         *out += if self == Self::Add {
@@ -408,9 +446,7 @@ impl Op {
                 }
             }
             Self::Sum => {
-                let target = pending
-                    .get_mut(&node.parents()[0].id())
-                    .expect("parent is in topology");
+                let target = adjoint(pending, &node.parents()[0])?;
                 for out in target {
                     *out += g[0];
                 }
@@ -423,7 +459,7 @@ impl Op {
                 }
                 // dA = G @ B^T; dB = A^T @ G, sem materializar transpostas.
                 {
-                    let da = pending.get_mut(&a.id()).expect("parent is in topology");
+                    let da = adjoint(pending, a)?;
                     for i in 0..m {
                         for p in 0..k {
                             for j in 0..n {
@@ -433,7 +469,7 @@ impl Op {
                     }
                 }
                 {
-                    let db = pending.get_mut(&b.id()).expect("parent is in topology");
+                    let db = adjoint(pending, b)?;
                     for i in 0..m {
                         for p in 0..k {
                             for j in 0..n {

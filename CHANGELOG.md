@@ -11,7 +11,10 @@ A versão nos manifests é 0.1.0. Ainda não foi estabelecida uma release public
 - Grafo dinâmico com autograd reverso, VJP e acumulação de gradientes.
 - Conv2D NCHW/OIHW com stride, padding e derivadas de entrada/pesos.
 - Acesso ao mapa de ativação e limpeza do cache da camada.
-- 19 testes de integração, incluindo diferenças finitas.
+- 21 testes de integração, incluindo diferenças finitas e grafo profundo.
+- `retain_grad()`: backward publica gradientes só em folhas e nós retidos.
+- Destruição iterativa do grafo e adjuntos alocados sob demanda no backward.
+- `Cargo.lock` versionado e hook local de pre-commit.
 - Exemplos de tensores, autograd e imagem RGB 224×224.
 - Workflow de CI do core, documentação técnica, guias de contribuição e SVGs.
 
@@ -20,4 +23,3 @@ A versão nos manifests é 0.1.0. Ainda não foi estabelecida uma release public
 - Python expõe somente a versão; não há katsu.Tensor ou wheel validado.
 - Não há otimizador, treinamento completo, Grad-CAM ou serviço HTTP.
 - CPU single-thread; sem comparação de performance com outros frameworks.
-- Destruição de grafos Rc extremamente profundos pode consumir a pilha.

@@ -16,6 +16,7 @@ jobs:
         with:
           components: rustfmt, clippy
       - run: cargo fmt --all -- --check
-      - run: cargo test -p katsu-core
+      - run: cargo test -p katsu-core --locked
       - run: cargo clippy -p katsu-core --all-targets -- -D warnings
       - run: cargo run -p katsu-core --release --example conv2d
+      - run: cargo check -p katsu-python --locked

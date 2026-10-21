@@ -46,7 +46,7 @@ This computes gradients, not a complete training loop.
 - Dynamic graphs, seeded VJPs and accumulation across repeated backward calls.
 - Conv2D forward and backward, NCHW inputs, OIHW weights, stride and zero padding.
 - Graph-connected activation access for future attribution methods.
-- 19 core tests, including finite-difference checks of matrix and convolution gradients.
+- 21 core tests, including finite-difference checks of matrix and convolution gradients.
 
 ![Architecture and implementation status](docs/assets/architecture.svg)
 

@@ -110,6 +110,8 @@ impl Conv2D {
             },
             vec![input.clone(), self.weights.clone()],
         );
+        // A ativação é o alvo do Grad-CAM: publica seu gradiente no backward.
+        output.retain_grad();
         *self.last_forward.borrow_mut() = Some((input.clone(), output.clone()));
         Ok(output)
     }
