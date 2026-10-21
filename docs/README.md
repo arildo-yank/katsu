@@ -21,7 +21,7 @@
 
 ## Ilustrações
 
-[Banner](assets/katsu-banner.svg) · [Arquitetura](assets/architecture.svg) ·
+[Ícone da katana](assets/katsu-icon.svg) · [PNG do ícone](assets/katsu-icon.png) · [Banner](assets/katsu-banner.svg) · [Arquitetura](assets/architecture.svg) ·
 [Autograd](assets/autograd.svg) · [Conv2D](assets/conv2d.svg)
 
 Os diagramas usam inglês para facilitar compartilhamento internacional.

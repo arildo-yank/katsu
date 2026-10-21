@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Katsu — Katana</title>
+  <desc id="desc">A curved ivory katana with a coral wrapped handle and mint guard, on a rounded midnight-blue tile.</desc>
+  <rect width="512" height="512" rx="112" fill="#0b1220"/>
+  <g transform="rotate(36 256 256)">
+    <!-- Curved single-edged blade; the pointed tip is the kissaki. -->
+    <path d="M241 326 C225 223 237 122 280 43 L278 100 C256 179 256 254 269 326 Z" fill="#f0f5fc"/>
+    <path d="M241 326 C225 223 237 122 280 43 C249 147 245 242 255 326 Z" fill="#aabbd0"/>
+    <path d="M247 310 C237 230 243 152 263 93" fill="none" stroke="#ffffff" stroke-width="4" stroke-linecap="round"/>
+    <!-- Habaki collar and tsuba guard. -->
+    <path d="M240 312 L268 312 L271 332 L241 332 Z" fill="#62dfbb"/>
+    <rect x="212" y="328" width="86" height="16" rx="8" fill="#62dfbb"/>
+    <!-- Tsuka with three contrasting wrap diamonds. -->
+    <rect x="241" y="344" width="30" height="110" rx="9" fill="#ff6b62"/>
+    <path d="M256 351 L266 364 L256 377 L246 364 Z M256 381 L266 394 L256 407 L246 394 Z M256 411 L266 424 L256 437 L246 424 Z" fill="#0b1220"/>
+    <rect x="239" y="444" width="34" height="12" rx="5" fill="#ff6b62"/>
+  </g>
+</svg>
