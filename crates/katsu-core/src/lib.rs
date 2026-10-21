@@ -6,3 +6,6 @@ pub use tensor::{Op, Tensor, TensorError};
 
 mod conv2d;
 pub use conv2d::Conv2D;
+
+mod optim;
+pub use optim::{fit, EpochMetrics, Sgd};

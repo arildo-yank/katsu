@@ -19,4 +19,5 @@ jobs:
       - run: cargo test -p katsu-core --locked
       - run: cargo clippy -p katsu-core --all-targets -- -D warnings
       - run: cargo run -p katsu-core --release --example conv2d
+      - run: cargo run -p katsu-core --example train
       - run: cargo check -p katsu-python --locked

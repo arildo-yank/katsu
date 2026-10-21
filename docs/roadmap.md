@@ -17,10 +17,11 @@ documentação ou estrutura de pastas, isoladamente, não tornam uma funcionalid
 
 ## 1. Demonstrar aprendizado
 
-- [ ] Definir API para parâmetros atualizáveis sem invalidar grafos anteriores.
-- [ ] Implementar SGD e uma política clara de zero_grad por passo.
-- [ ] Adicionar ReLU e perda para um problema pequeno.
-- [ ] Criar um treinamento reproduzível, com seed e dados de demonstração.
+- [x] Definir API para parâmetros atualizáveis sem invalidar grafos anteriores.
+- [x] Implementar SGD e uma política clara de zero_grad por passo.
+- [x] Adicionar ReLU e perda para um problema pequeno.
+- [x] Criar um treinamento reproduzível, com seed e dados de demonstração.
+- [x] Emitir métricas por época (JSON Lines) para o monitor arandu.
 
 Critério: o teste de integração executa múltiplos passos e demonstra redução da
 perda dentro de tolerâncias documentadas. Ter backward não basta para concluir este marco.

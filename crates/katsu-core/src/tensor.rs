@@ -27,6 +27,13 @@ pub enum TensorError {
         right_rows: usize,
     },
     Allocation(TryReserveError),
+    InvalidLearningRate,
+    MissingGradient {
+        index: usize,
+    },
+    NonFiniteLoss {
+        epoch: usize,
+    },
 }
 
 impl fmt::Display for TensorError {
@@ -62,6 +69,15 @@ impl fmt::Display for TensorError {
                 "matmul inner dimensions differ: {left_columns} and {right_rows}"
             ),
             Self::Allocation(error) => write!(f, "tensor allocation failed: {error}"),
+            Self::InvalidLearningRate => {
+                write!(f, "learning rate must be finite and positive")
+            }
+            Self::MissingGradient { index } => {
+                write!(f, "parameter {index} has no gradient; run backward first")
+            }
+            Self::NonFiniteLoss { epoch } => {
+                write!(f, "loss is NaN or infinite at epoch {epoch}")
+            }
         }
     }
 }
@@ -90,6 +106,7 @@ pub enum Op {
     Matmul,
     Conv2D { stride: usize, padding: usize },
     Sum,
+    Relu,
 }
 
 /// Handle compartilhado: clone preserva a identidade do nó, sem copiar os dados.
@@ -263,6 +280,20 @@ impl Tensor {
             copy_shape(self.shape())?,
             op,
             vec![self.clone(), rhs.clone()],
+        ))
+    }
+
+    /// max(0, x) elemento a elemento. A derivada em x = 0 é definida como 0.
+    pub fn relu(&self) -> Result<Self, TensorError> {
+        let mut data = zeros_buffer(self.numel())?;
+        for (out, x) in data.iter_mut().zip(self.data()) {
+            *out = x.max(0.0);
+        }
+        Ok(Self::node(
+            data,
+            copy_shape(self.shape())?,
+            Op::Relu,
+            vec![self.clone()],
         ))
     }
 
@@ -442,6 +473,15 @@ impl Op {
                         } else {
                             grad * other.data()[index]
                         };
+                    }
+                }
+            }
+            Self::Relu => {
+                let parent = &node.parents()[0];
+                let target = adjoint(pending, parent)?;
+                for ((out, grad), x) in target.iter_mut().zip(g).zip(parent.data()) {
+                    if *x > 0.0 {
+                        *out += grad;
                     }
                 }
             }

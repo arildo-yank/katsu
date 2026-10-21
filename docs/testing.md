@@ -29,7 +29,7 @@ sem substituir os testes por implementações equivalentes.
 mkdir -p target/manual
 rustc --edition=2021 --crate-name katsu_core --crate-type rlib \
   crates/katsu-core/src/lib.rs --out-dir target/manual
-for suite in tensor autograd conv2d; do
+for suite in tensor autograd conv2d training; do
   rustc --edition=2021 --test "crates/katsu-core/tests/$suite.rs" \
     --extern katsu_core=target/manual/libkatsu_core.rlib \
     -o "target/manual/$suite-tests" && "target/manual/$suite-tests" || break
@@ -47,6 +47,7 @@ de prosseguir. Essa alternativa valida o core, não o empacotamento Cargo/PyO3.
 | --- | --- | --- |
 | [Tensor](../crates/katsu-core/tests/tensor.rs) | 6 | Shapes, overflow, soma, matmul, escalares e vazios |
 | [Autograd](../crates/katsu-core/tests/autograd.rs) | 8 | Nós compartilhados, seeds, acumulação, borrows, retain_grad, grafo profundo e diferenças finitas |
+| [Treinamento](../crates/katsu-core/tests/training.rs) | 6 | SGD à mão, erros, convergência de regressão linear, divergência, JSON e ReLU |
 | [Conv2D](../crates/katsu-core/tests/conv2d.rs) | 7 | Forward conhecido, padding/stride, dX/dW, cache, batch e inicialização |
 
 As diferenças finitas da Conv2D perturbam entradas e pesos, com batch > 1,
@@ -56,7 +57,7 @@ Os testes usam tolerâncias para f32; não prometem igualdade bit a bit entre pl
 
 ## Evidência disponível
 
-21 testes locais passaram via Cargo. O core passou pelo clippy-driver sem avisos;
+27 testes locais passaram via Cargo. O core passou pelo clippy-driver sem avisos;
 o exemplo RGB 224×224 executou em build otimizado. Isso não equivale a benchmark.
 A execução remota do GitHub Actions e o build Python completo ainda não foram
 verificados. Não há medição comparativa com PyTorch.

@@ -29,6 +29,7 @@ cópia independente. Shape e dados são privados, acessíveis por slices imutáv
 | `backward_with(seed: &[f32])` | `Result<()>` | VJP com seed achatado do tamanho da saída |
 | `grad()` | `Result<Ref<'_, Option<Vec<f32>>>>` | Guard de leitura; inicialmente None |
 | `zero_grad()` | `Result<()>` | Define grad deste nó como None |
+| `relu()` | `Result<Tensor>` | max(0, x); derivada 0 em x ≤ 0 |
 | `retain_grad()` | `()` | Faz backward publicar o grad deste intermediário |
 | `retains_grad()` | `bool` | Verdadeiro para folhas e nós com `retain_grad` |
 
@@ -39,10 +40,21 @@ Backward publica `grad` só em folhas e em nós marcados com `retain_grad()`;
 a saída de `Conv2D::forward` já vem marcada.
 Libere o guard de grad antes de chamar backward ou zero_grad.
 
+## Treinamento
+
+Detalhes e contrato JSON em [Treinamento](training.md).
+
+| Item | Retorno | Contrato |
+| --- | --- | --- |
+| `Sgd::new(learning_rate: f32)` | `Result<Sgd>` | Taxa finita e positiva, senão `InvalidLearningRate` |
+| `Sgd::step(params: &[Tensor])` | `Result<Vec<Tensor>>` | Novas folhas `p - lr*grad`; `MissingGradient { index }` se faltar grad |
+| `fit(params, &sgd, epochs, loss_fn, on_epoch)` | `Result<Vec<Tensor>>` | Loop de SGD; `NonFiniteLoss { epoch }` em NaN/Inf |
+| `EpochMetrics { epoch, loss, learning_rate }` | `Display` | Uma linha JSON por época |
+
 ## Op
 
 Enum público com `Debug`, `Clone`, `Copy`, `PartialEq` e `Eq`:
-`Leaf`, `Add`, `Mul`, `Matmul`, `Sum`, `Conv2D { stride: usize, padding: usize }`.
+`Leaf`, `Add`, `Mul`, `Matmul`, `Sum`, `Relu`, `Conv2D { stride: usize, padding: usize }`.
 
 O método que aplica as derivadas locais é interno. O usuário inspeciona `op()` e
 `parents()`, mas não injeta operações ou modifica o grafo. Conv2D registra os pais

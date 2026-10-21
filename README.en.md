@@ -46,14 +46,15 @@ This computes gradients, not a complete training loop.
 - Dynamic graphs, seeded VJPs and accumulation across repeated backward calls.
 - Conv2D forward and backward, NCHW inputs, OIHW weights, stride and zero padding.
 - Graph-connected activation access for future attribution methods.
-- 21 core tests, including finite-difference checks of matrix and convolution gradients.
+- SGD optimizer, a minimal `fit` loop, ReLU and per-epoch JSON Lines metrics.
+- 27 core tests, including finite-difference checks of matrix and convolution gradients.
 
 ![Architecture and implementation status](docs/assets/architecture.svg)
 
 ## Scope and limitations
 
-Single-threaded Rc/RefCell engine; no GPU, optimizer, parameter-update API or
-complete training example. No broadcasting or higher-order derivatives. Conv2D
+Single-threaded Rc/RefCell engine; no GPU. Training is plain fixed-rate SGD:
+no Adam, momentum or mini-batches. No broadcasting or higher-order derivatives. Conv2D
 has no bias, groups or dilation. Python is a packaging scaffold exposing a
 version value, not a Tensor API. Do not expect `pip install katsu` to install this project.
 

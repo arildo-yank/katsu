@@ -8,7 +8,8 @@
 2. [Arquitetura](architecture.md): responsabilidades e ownership.
 3. [Autograd](autograd.md): como as derivadas percorrem o grafo.
 4. [Conv2D e explicabilidade](conv2d.md): imagem, pesos, gradientes e ativações.
-5. [Referência da API](api.md): contratos dos métodos e tratamento de erros.
+5. [Treinamento](training.md): SGD, loop `fit` e métricas para o monitor arandu.
+6. [Referência da API](api.md): contratos dos métodos e tratamento de erros.
 
 ## Desenvolver e publicar
 

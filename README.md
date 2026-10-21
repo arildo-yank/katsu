@@ -10,8 +10,8 @@ Katsu combina tensores CPU `f32`, diferenciação automática reversa e Conv2D e
 core sem dependências externas. A explicabilidade é uma direção do projeto:
 ativações e gradientes já estão disponíveis; Grad-CAM ainda está no roadmap.
 
-> **Prévia técnica · 0.1.0 · MIT.** Ainda não há otimizador, treinamento completo
-> ou classe Tensor em Python. A API pode mudar. Não foram medidos ganhos sobre PyTorch.
+> **Prévia técnica · 0.1.0 · MIT.** Há SGD e um loop de treino mínimo; ainda não há
+> Adam, mini-batches ou classe Tensor em Python. A API pode mudar. Não foram medidos ganhos sobre PyTorch.
 
 ## Comece pelo código que funciona
 
@@ -21,6 +21,7 @@ Na raiz de uma cópia local do projeto, com Rust e Cargo no PATH:
 cargo test -p katsu-core
 cargo run -p katsu-core --example autograd
 cargo run -p katsu-core --release --example conv2d
+cargo run -p katsu-core --example train
 ```
 
 Cargo pode precisar de rede para resolver PyO3, mesmo selecionando apenas o core,
@@ -53,7 +54,7 @@ O [arquivo executável](crates/katsu-core/examples/autograd.rs) também imprime 
 | Visão | Conv2D NCHW, stride, padding, dX e dW | Bias, groups, dilation, pooling |
 | Explicabilidade | Acesso às ativações e seus gradientes | Grad-CAM e heatmaps |
 | Python | Estrutura PyO3/Maturin; módulo de versão | `katsu.Tensor`, wheels publicados |
-| Treinamento | Gradientes de operações compostas | SGD/Adam, parâmetros atualizáveis, treino completo |
+| Treinamento | SGD, loop `fit`, ReLU, métricas JSON por época ([guia](docs/training.md)) | Adam, momentum, mini-batches, agendamento de lr |
 | Execução | CPU, single-thread, Rust seguro | GPU, paralelismo, backend HTTP |
 
 ## Do pixel ao gradiente
@@ -82,6 +83,7 @@ não é `Send`/`Sync`. Leia a [arquitetura e os limites](docs/architecture.md).
 | [Começar](docs/getting-started.md) | Ambiente, comandos, integração Rust e Python experimental |
 | [Referência da API](docs/api.md) | Tensor, Conv2D, Op e todos os erros públicos |
 | [Autograd](docs/autograd.md) | Matemática, ordem topológica, VJP e acumulação |
+| [Treinamento](docs/training.md) | SGD, loop `fit` e contrato JSON com o monitor arandu |
 | [Conv2D](docs/conv2d.md) | Layout, derivadas, cache e caminho para Grad-CAM |
 | [Testes e validação](docs/testing.md) | Evidências, reprodução offline, CI e limitações |
 | [Roadmap](docs/roadmap.md) | Próximas entregas e critérios de conclusão |
@@ -99,7 +101,7 @@ single-thread cujo limite de escala está documentado em [arquitetura](docs/arch
 
 ## Validação e licença
 
-Há **21 testes de integração** do core: 6 de Tensor, 8 de Autograd e 7 de Conv2D.
+Há **27 testes de integração** do core: 6 de Tensor, 8 de Autograd, 7 de Conv2D e 6 de Treinamento.
 A verificação local via `rustc` passou, incluindo diferenças finitas. O workflow
 [GitHub Actions](.github/workflows/ci.yml) está configurado; sua execução remota
 não foi verificada. O workspace Python completo ainda não foi validado.
