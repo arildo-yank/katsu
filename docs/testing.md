@@ -48,7 +48,7 @@ de prosseguir. Essa alternativa valida o core, não o empacotamento Cargo/PyO3.
 | [Tensor](../crates/katsu-core/tests/tensor.rs) | 6 | Shapes, overflow, soma, matmul, escalares e vazios |
 | [Autograd](../crates/katsu-core/tests/autograd.rs) | 8 | Nós compartilhados, seeds, acumulação, borrows, retain_grad, grafo profundo e diferenças finitas |
 | [Operações](../crates/katsu-core/tests/ops.rs) | 11 | Broadcasting, transpose, reshape, GELU, softmax, LayerNorm, máscara causal, cross-entropy, Adam e um bloco de atenção, todos com diferenças finitas |
-| [Katsu LM](../crates/katsu-core/tests/lm.rs) | 8 | Tokenizer, shapes, perda inicial, causalidade, diferenças finitas, aprendizado, geração e checkpoint |
+| [Katsu LM](../crates/katsu-core/tests/lm.rs) | 11 | Tokenizer, shapes, perda inicial, causalidade, diferenças finitas (1 e 4 cabeças), aprendizado, geração e checkpoint |
 | [Treinamento](../crates/katsu-core/tests/training.rs) | 6 | SGD à mão, erros, convergência de regressão linear, divergência, JSON e ReLU |
 | [Conv2D](../crates/katsu-core/tests/conv2d.rs) | 7 | Forward conhecido, padding/stride, dX/dW, cache, batch e inicialização |
 
@@ -59,7 +59,7 @@ Os testes usam tolerâncias para f32; não prometem igualdade bit a bit entre pl
 
 ## Evidência disponível
 
-46 testes locais passaram via Cargo. O core passou pelo clippy-driver sem avisos;
+49 testes locais passaram via Cargo. O core passou pelo clippy-driver sem avisos;
 o exemplo RGB 224×224 executou em build otimizado. Isso não equivale a benchmark.
 A execução remota do GitHub Actions e o build Python completo ainda não foram
 verificados. Não há medição comparativa com PyTorch.

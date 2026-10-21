@@ -9,8 +9,9 @@
 3. [Autograd](autograd.md): como as derivadas percorrem o grafo.
 4. [Conv2D e explicabilidade](conv2d.md): imagem, pesos, gradientes e ativações.
 5. [Treinamento](training.md): SGD, loop `fit` e métricas para o monitor arandu.
-6. [Katsu LM](katsu-lm.md): o primeiro modelo de linguagem do Katsu.
-7. [Referência da API](api.md): contratos dos métodos e tratamento de erros.
+6. [Katsu LM](katsu-lm.md): o modelo de linguagem do Katsu.
+7. [Corpus](corpus.md): as 22 obras brasileiras em domínio público usadas no treino.
+8. [Referência da API](api.md): contratos dos métodos e tratamento de erros.
 
 ## Desenvolver e publicar
 

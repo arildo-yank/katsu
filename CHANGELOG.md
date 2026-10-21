@@ -14,7 +14,10 @@ A versão nos manifests é 0.1.0. Ainda não foi estabelecida uma release public
 - Katsu LM, modelo de linguagem de caracteres (`KatsuLmConfig`, `CharTokenizer`), geração com temperatura,
   checkpoint binário (`save_params`/`load_params`) e exemplo `katsu_lm`.
 - Matmul e seu backward com laços vetorizáveis: ~11× mais rápido no treino do Katsu LM.
-- 46 testes de integração, incluindo diferenças finitas, grafo profundo e convergência.
+- Katsu LM v1: atenção com várias cabeças (`heads`), 4 camadas × 4 cabeças, ~481 mil
+  parâmetros; treino com uma pasta de obras e validação por obra; vocabulário salvo
+  junto do checkpoint; `scripts/fetch-corpus.sh` e [corpus](docs/corpus.md) com 22 obras.
+- 49 testes de integração, incluindo diferenças finitas, grafo profundo e convergência.
 - Broadcasting em `add`/`mul`; `transpose`, `reshape`, `gelu`, `softmax`, `log_softmax`,
   `layer_norm`, `cross_entropy`, `one_hot`, `causal_mask` e `scalar`.
 - Otimizador `Adam` e trait `Optimizer`; `fit` recebe `&mut` de qualquer otimizador.

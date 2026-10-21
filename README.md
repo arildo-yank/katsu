@@ -55,7 +55,7 @@ O [arquivo executável](crates/katsu-core/examples/autograd.rs) também imprime 
 | Visão | Conv2D NCHW, stride, padding, dX e dW | Bias, groups, dilation, pooling |
 | Explicabilidade | Acesso às ativações e seus gradientes | Grad-CAM e heatmaps |
 | Python | Estrutura PyO3/Maturin; módulo de versão | `katsu.Tensor`, wheels publicados |
-| Linguagem | Katsu LM: modelo de caracteres em português, geração e checkpoint ([guia](docs/katsu-lm.md)) | Várias cabeças, tokenizer BPE, lote em matmul |
+| Linguagem | Katsu LM v1: 4 camadas × 4 cabeças, 22 obras brasileiras ([guia](docs/katsu-lm.md), [corpus](docs/corpus.md)) | Tokenizer BPE, lote em matmul, threads |
 | Treinamento | SGD, Adam, loop `fit`, métricas JSON por época ([guia](docs/training.md)) | Mini-batches, agendamento de lr, gradient clipping |
 | Execução | CPU, single-thread, Rust seguro | GPU, paralelismo, backend HTTP |
 
@@ -104,7 +104,7 @@ single-thread cujo limite de escala está documentado em [arquitetura](docs/arch
 
 ## Validação e licença
 
-Há **46 testes de integração** do core: 6 de Tensor, 8 de Autograd, 7 de Conv2D, 6 de Treinamento, 11 de operações de transformer e 8 do Katsu LM.
+Há **49 testes de integração** do core: 6 de Tensor, 8 de Autograd, 7 de Conv2D, 6 de Treinamento, 11 de operações de transformer e 11 do Katsu LM.
 A verificação local via `rustc` passou, incluindo diferenças finitas. O workflow
 [GitHub Actions](.github/workflows/ci.yml) está configurado; sua execução remota
 não foi verificada. O workspace Python completo ainda não foi validado.

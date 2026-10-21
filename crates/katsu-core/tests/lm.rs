@@ -12,6 +12,7 @@ fn tiny(vocab_size: usize) -> KatsuLmConfig {
         block_size: 8,
         embed_dim: 8,
         layers: 1,
+        heads: 1,
     }
 }
 
@@ -109,6 +110,7 @@ fn learns_to_continue_a_portuguese_sentence() -> Result<()> {
         block_size: 16,
         embed_dim: 24,
         layers: 1,
+        heads: 1,
     };
     let mut rng = SplitMix64(11);
     let mut losses = Vec::new();
@@ -170,5 +172,76 @@ fn checkpoint_round_trip_and_rejects_garbage() -> Result<()> {
     );
     assert!(katsu_core::load_params(&mut &bytes[..bytes.len() - 1]).is_err());
     assert!(katsu_core::load_params(&mut &b"NOTKATSU"[..]).is_err());
+    Ok(())
+}
+
+fn multi_head(vocab_size: usize) -> KatsuLmConfig {
+    KatsuLmConfig {
+        vocab_size,
+        block_size: 8,
+        embed_dim: 8,
+        layers: 2,
+        heads: 4,
+    }
+}
+
+#[test]
+fn heads_must_divide_embed_dim() {
+    let bad = KatsuLmConfig {
+        heads: 3,
+        ..multi_head(10)
+    };
+    assert!(matches!(bad.init(0), Err(TensorError::InvalidShape(_))));
+    let zero = KatsuLmConfig {
+        heads: 0,
+        ..multi_head(10)
+    };
+    assert!(matches!(zero.init(0), Err(TensorError::InvalidShape(_))));
+}
+
+#[test]
+fn multi_head_layout_count_and_causality() -> Result<()> {
+    let config = multi_head(10);
+    let params = config.init(8)?;
+    assert_eq!(params.len(), config.param_tensors());
+    // Mesmo total de números que uma cabeça: as cabeças dividem a largura.
+    let total: usize = params.iter().map(Tensor::numel).sum();
+    assert_eq!(total, config.param_count());
+    assert_eq!(total, KatsuLmConfig { heads: 1, ..config }.param_count());
+    assert_eq!(params[2 + 2].shape(), &[8, 2]); // wq da 1ª cabeça: d -> d/4
+    assert_eq!(params[2 + 5].shape(), &[2, 8]); // wo da 1ª cabeça: d/4 -> d
+    let a = config.forward(&params, &[1, 2, 3, 4])?;
+    let b = config.forward(&params, &[1, 2, 3, 7])?;
+    assert_eq!(a.data()[..30], b.data()[..30]);
+    Ok(())
+}
+
+#[test]
+fn multi_head_gradients_match_finite_differences() -> Result<()> {
+    let config = multi_head(6);
+    let params = config.init(13)?;
+    let window: &[usize] = &[0, 3, 1, 4, 1, 5, 2];
+    config.loss(&params, &[window])?.backward()?;
+    let per_layer = 2 + 4 * 4 + 6;
+    // wq da 3ª cabeça da 2ª camada, wo da 4ª cabeça da 1ª camada e W1 da 2ª camada.
+    let wq = 2 + per_layer + 2 + 2 * 4;
+    let wo = 2 + 2 + 3 * 4 + 3;
+    let w1 = 2 + per_layer + 2 + 16 + 2;
+    for (tensor, element) in [(wq, 5), (wo, 9), (w1, 30)] {
+        let analytical = params[tensor].grad()?.as_ref().unwrap()[element];
+        let eval = |delta: f32| -> Result<f32> {
+            let mut changed = params.clone();
+            let mut data = params[tensor].data().to_vec();
+            data[element] += delta;
+            changed[tensor] = Tensor::new(data, params[tensor].shape())?;
+            Ok(config.loss(&changed, &[window])?.data()[0])
+        };
+        let eps = 1e-2;
+        let numerical = (eval(eps)? - eval(-eps)?) / (2.0 * eps);
+        assert!(
+            (analytical - numerical).abs() < 2e-3 + 2e-2 * numerical.abs(),
+            "tensor {tensor}[{element}]: {analytical} vs {numerical}"
+        );
+    }
     Ok(())
 }

@@ -1,4 +1,5 @@
-//! Katsu LM: modelo de linguagem de caracteres, transformer decoder-only, uma cabeça de atenção por camada.
+//! Katsu LM: modelo de linguagem de caracteres, transformer decoder-only com
+//! atenção causal de várias cabeças.
 //!
 //! Os parâmetros são um `Vec<Tensor>` plano (o formato que `fit` e os otimizadores
 //! usam); `KatsuLmConfig` define o layout. Cada sequência passa pelo grafo como uma
@@ -60,22 +61,19 @@ pub struct KatsuLmConfig {
     /// Largura do modelo (d).
     pub embed_dim: usize,
     pub layers: usize,
+    /// Cabeças de atenção; `embed_dim` precisa ser múltiplo delas.
+    pub heads: usize,
 }
 
-// Layout de cada camada em `params`.
+// Layout de cada camada em `params`:
+// [ln1_g, ln1_b, (wq, wk, wv, wo) × cabeças, ln2_g, ln2_b, w1, b1, w2, b2].
+// Cada cabeça projeta d -> d/h; wo [d/h, d] devolve a soma ao resíduo, o que
+// equivale a concatenar as cabeças e multiplicar por uma Wo [d, d].
+// Com uma cabeça, o layout (e a sequência da inicialização) é o do v0.
 const LN1_G: usize = 0;
 const LN1_B: usize = 1;
-const WQ: usize = 2;
-const WK: usize = 3;
-const WV: usize = 4;
-const WO: usize = 5;
-const LN2_G: usize = 6;
-const LN2_B: usize = 7;
-const W1: usize = 8;
-const B1: usize = 9;
-const W2: usize = 10;
-const B2: usize = 11;
-const PER_LAYER: usize = 12;
+const HEAD_START: usize = 2;
+const PER_HEAD: usize = 4;
 
 impl KatsuLmConfig {
     fn validate(&self) -> Result<()> {
@@ -84,12 +82,21 @@ impl KatsuLmConfig {
                 "vocab_size, block_size and embed_dim must be positive",
             ));
         }
+        if self.heads == 0 || self.embed_dim % self.heads != 0 {
+            return Err(TensorError::InvalidShape(
+                "heads must be positive and divide embed_dim",
+            ));
+        }
         Ok(())
+    }
+
+    fn per_layer(&self) -> usize {
+        HEAD_START + self.heads * PER_HEAD + 6
     }
 
     /// Quantidade de tensores em `params`: wte, wpe, camadas, LN final e cabeça.
     pub fn param_tensors(&self) -> usize {
-        2 + self.layers * PER_LAYER + 3
+        2 + self.layers * self.per_layer() + 3
     }
 
     /// Total de números treináveis.
@@ -110,13 +117,16 @@ impl KatsuLmConfig {
         let mut params = Vec::with_capacity(self.param_tensors());
         params.push(rng.tensor(&[v, d], std)?);
         params.push(rng.tensor(&[t, d], std)?);
+        let dh = d / self.heads;
         for _ in 0..self.layers {
             params.push(Tensor::new(vec![1.0; d], &[d])?);
             params.push(Tensor::zeros(&[d])?);
-            for _ in 0..3 {
-                params.push(rng.tensor(&[d, d], std)?);
+            for _ in 0..self.heads {
+                for _ in 0..3 {
+                    params.push(rng.tensor(&[d, dh], std)?);
+                }
+                params.push(rng.tensor(&[dh, d], residual_std)?);
             }
-            params.push(rng.tensor(&[d, d], residual_std)?);
             params.push(Tensor::new(vec![1.0; d], &[d])?);
             params.push(Tensor::zeros(&[d])?);
             params.push(rng.tensor(&[d, 4 * d], std)?);
@@ -131,6 +141,7 @@ impl KatsuLmConfig {
     }
 
     fn check_params(&self, params: &[Tensor]) -> Result<()> {
+        self.validate()?;
         if params.len() != self.param_tensors() {
             return Err(TensorError::InvalidShape(
                 "params do not match KatsuLmConfig",
@@ -154,22 +165,27 @@ impl KatsuLmConfig {
             .matmul(&params[0])?
             .add(&Tensor::one_hot(&positions, self.block_size)?.matmul(&params[1])?)?;
         let mask = Tensor::causal_mask(t)?;
-        let scale = Tensor::scalar(1.0 / (self.embed_dim as f32).sqrt())?;
+        let head_dim = self.embed_dim / self.heads;
+        let scale = Tensor::scalar(1.0 / (head_dim as f32).sqrt())?;
+        let per_layer = self.per_layer();
         for layer in 0..self.layers {
-            let p = &params[2 + layer * PER_LAYER..2 + (layer + 1) * PER_LAYER];
+            let p = &params[2 + layer * per_layer..2 + (layer + 1) * per_layer];
             let h = x.layer_norm()?.mul(&p[LN1_G])?.add(&p[LN1_B])?;
-            let (q, k, v) = (h.matmul(&p[WQ])?, h.matmul(&p[WK])?, h.matmul(&p[WV])?);
-            let attention = q
-                .matmul(&k.transpose()?)?
-                .mul(&scale)?
-                .add(&mask)?
-                .softmax()?;
-            x = x.add(&attention.matmul(&v)?.matmul(&p[WO])?)?;
-            let h = x.layer_norm()?.mul(&p[LN2_G])?.add(&p[LN2_B])?;
-            let mlp = h.matmul(&p[W1])?.add(&p[B1])?.gelu()?;
-            x = x.add(&mlp.matmul(&p[W2])?.add(&p[B2])?)?;
+            for w in p[HEAD_START..HEAD_START + self.heads * PER_HEAD].chunks_exact(PER_HEAD) {
+                let (q, k, v) = (h.matmul(&w[0])?, h.matmul(&w[1])?, h.matmul(&w[2])?);
+                let attention = q
+                    .matmul(&k.transpose()?)?
+                    .mul(&scale)?
+                    .add(&mask)?
+                    .softmax()?;
+                x = x.add(&attention.matmul(&v)?.matmul(&w[3])?)?;
+            }
+            let mlp_params = &p[HEAD_START + self.heads * PER_HEAD..];
+            let h = x.layer_norm()?.mul(&mlp_params[0])?.add(&mlp_params[1])?;
+            let mlp = h.matmul(&mlp_params[2])?.add(&mlp_params[3])?.gelu()?;
+            x = x.add(&mlp.matmul(&mlp_params[4])?.add(&mlp_params[5])?)?;
         }
-        let head = &params[2 + self.layers * PER_LAYER..];
+        let head = &params[2 + self.layers * per_layer..];
         x.layer_norm()?
             .mul(&head[0])?
             .add(&head[1])?
