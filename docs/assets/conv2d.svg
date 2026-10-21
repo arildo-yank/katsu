@@ -1,0 +1,84 @@
+<?xml version="1.0" ?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="656" viewBox="0 0 1200 656" role="img" aria-labelledby="title desc">
+  <title id="title">Conv2D forward and backward in NCHW</title>
+  <desc id="desc">A batch of one RGB image of size 224 by 224 uses eight 3 by 3 filters with stride 1 and padding 1. Output shape is [1,8,224,224]. Each forward product contributes gradient times weight to dX and gradient times input to dW.</desc>
+  <defs>
+    <marker id="mint" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#62dfbb"/>
+    </marker>
+    <marker id="red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6b62"/>
+    </marker>
+    <marker id="blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#83b9ff"/>
+    </marker>
+  </defs>
+  <rect width="1200" height="656" rx="20" fill="#0b1220"/>
+  <text x="44" y="49" fill="#62dfbb" font-size="14" font-weight="700" font-family="Arial, Helvetica, sans-serif">03 / CONV2D</text>
+  <text x="44" y="94" fill="#f0f5fc" font-size="32" font-weight="700" font-family="Arial, Helvetica, sans-serif">Pixels in. Features out. Gradients back.</text>
+  <text x="44" y="129" fill="#aabbd0" font-size="18" font-weight="400" font-family="Arial, Helvetica, sans-serif">Direct cross-correlation · Virtual zero padding · No patch allocation</text>
+  <rect x="44" y="174" width="304" height="211" rx="16" fill="#121e30" stroke="#2a3b51" stroke-width="1.5"/>
+  <rect x="448" y="174" width="304" height="211" rx="16" fill="#121e30" stroke="#2a3b51" stroke-width="1.5"/>
+  <rect x="852" y="174" width="304" height="211" rx="16" fill="#121e30" stroke="#2a3b51" stroke-width="1.5"/>
+  <path d="M 349 279 H 445" fill="none" stroke="#62dfbb" stroke-width="2.5" marker-end="url(#mint)"/>
+  <path d="M 753 279 H 849" fill="none" stroke="#62dfbb" stroke-width="2.5" marker-end="url(#mint)"/>
+  <text x="65" y="207" fill="#62dfbb" font-size="14" font-weight="700" font-family="Arial, Helvetica, sans-serif">INPUT / NCHW</text>
+  <text x="469" y="207" fill="#62dfbb" font-size="14" font-weight="700" font-family="Arial, Helvetica, sans-serif">WEIGHTS / OIHW</text>
+  <text x="873" y="207" fill="#62dfbb" font-size="14" font-weight="700" font-family="Arial, Helvetica, sans-serif">OUTPUT / NCHW</text>
+  <rect x="94" y="234" width="85" height="70" rx="6" fill="#16263b" stroke="#83b9ff" stroke-width="1.5"/>
+  <path d="M 115 234 V 304" fill="none" stroke="#83b9ff" stroke-width="2.5"/>
+  <path d="M 94 251 H 179" fill="none" stroke="#83b9ff" stroke-width="2.5"/>
+  <path d="M 136 234 V 304" fill="none" stroke="#83b9ff" stroke-width="2.5"/>
+  <path d="M 94 268 H 179" fill="none" stroke="#83b9ff" stroke-width="2.5"/>
+  <path d="M 157 234 V 304" fill="none" stroke="#83b9ff" stroke-width="2.5"/>
+  <path d="M 94 285 H 179" fill="none" stroke="#83b9ff" stroke-width="2.5"/>
+  <rect x="79" y="244" width="85" height="70" rx="6" fill="#16263b" stroke="#62dfbb" stroke-width="1.5"/>
+  <path d="M 100 244 V 314" fill="none" stroke="#62dfbb" stroke-width="2.5"/>
+  <path d="M 79 261 H 164" fill="none" stroke="#62dfbb" stroke-width="2.5"/>
+  <path d="M 121 244 V 314" fill="none" stroke="#62dfbb" stroke-width="2.5"/>
+  <path d="M 79 278 H 164" fill="none" stroke="#62dfbb" stroke-width="2.5"/>
+  <path d="M 142 244 V 314" fill="none" stroke="#62dfbb" stroke-width="2.5"/>
+  <path d="M 79 295 H 164" fill="none" stroke="#62dfbb" stroke-width="2.5"/>
+  <rect x="64" y="254" width="85" height="70" rx="6" fill="#16263b" stroke="#ff6b62" stroke-width="1.5"/>
+  <path d="M 85 254 V 324" fill="none" stroke="#ff6b62" stroke-width="2.5"/>
+  <path d="M 64 271 H 149" fill="none" stroke="#ff6b62" stroke-width="2.5"/>
+  <path d="M 106 254 V 324" fill="none" stroke="#ff6b62" stroke-width="2.5"/>
+  <path d="M 64 288 H 149" fill="none" stroke="#ff6b62" stroke-width="2.5"/>
+  <path d="M 127 254 V 324" fill="none" stroke="#ff6b62" stroke-width="2.5"/>
+  <path d="M 64 305 H 149" fill="none" stroke="#ff6b62" stroke-width="2.5"/>
+  <text x="194" y="264" fill="#f0f5fc" font-size="18" font-weight="700" font-family="Arial, Helvetica, sans-serif">RGB image</text>
+  <text x="194" y="294" fill="#aabbd0" font-size="16" font-weight="400" font-family="Arial, Helvetica, sans-serif">3 channels</text>
+  <text x="65" y="359" fill="#f0f5fc" font-size="22" font-weight="700" font-family="Arial, Helvetica, sans-serif">[1, 3, 224, 224]</text>
+  <rect x="470" y="239" width="20" height="20" rx="3" fill="#214438" stroke="#62dfbb" stroke-width="1.5"/>
+  <rect x="494" y="239" width="20" height="20" rx="3" fill="#214438" stroke="#62dfbb" stroke-width="1.5"/>
+  <rect x="518" y="239" width="20" height="20" rx="3" fill="#214438" stroke="#62dfbb" stroke-width="1.5"/>
+  <rect x="470" y="263" width="20" height="20" rx="3" fill="#214438" stroke="#62dfbb" stroke-width="1.5"/>
+  <rect x="494" y="263" width="20" height="20" rx="3" fill="#214438" stroke="#62dfbb" stroke-width="1.5"/>
+  <rect x="518" y="263" width="20" height="20" rx="3" fill="#214438" stroke="#62dfbb" stroke-width="1.5"/>
+  <rect x="470" y="287" width="20" height="20" rx="3" fill="#214438" stroke="#62dfbb" stroke-width="1.5"/>
+  <rect x="494" y="287" width="20" height="20" rx="3" fill="#214438" stroke="#62dfbb" stroke-width="1.5"/>
+  <rect x="518" y="287" width="20" height="20" rx="3" fill="#214438" stroke="#62dfbb" stroke-width="1.5"/>
+  <text x="558" y="257" fill="#f0f5fc" font-size="18" font-weight="700" font-family="Arial, Helvetica, sans-serif">8 filters, 3 × 3</text>
+  <text x="558" y="285" fill="#aabbd0" font-size="16" font-weight="400" font-family="Arial, Helvetica, sans-serif">stride 1</text>
+  <text x="558" y="312" fill="#aabbd0" font-size="16" font-weight="400" font-family="Arial, Helvetica, sans-serif">padding 1</text>
+  <text x="469" y="359" fill="#f0f5fc" font-size="22" font-weight="700" font-family="Arial, Helvetica, sans-serif">[8, 3, 3, 3]</text>
+  <rect x="892" y="250" width="71" height="65" rx="4" fill="#182c3e" stroke="#83b9ff" stroke-width="1.5"/>
+  <rect x="908" y="243" width="71" height="65" rx="4" fill="#182c3e" stroke="#83b9ff" stroke-width="1.5"/>
+  <rect x="924" y="236" width="71" height="65" rx="4" fill="#182c3e" stroke="#83b9ff" stroke-width="1.5"/>
+  <rect x="940" y="229" width="71" height="65" rx="4" fill="#182c3e" stroke="#83b9ff" stroke-width="1.5"/>
+  <text x="1030" y="266" fill="#f0f5fc" font-size="16" font-weight="400" font-family="Arial, Helvetica, sans-serif">8 feature</text>
+  <text x="1030" y="292" fill="#f0f5fc" font-size="16" font-weight="400" font-family="Arial, Helvetica, sans-serif">channels</text>
+  <text x="873" y="359" fill="#f0f5fc" font-size="22" font-weight="700" font-family="Arial, Helvetica, sans-serif">[1, 8, 224, 224]</text>
+  <path d="M 1004 386 V 425 H 601 V 386" fill="none" stroke="#ff6b62" stroke-width="2.5" marker-end="url(#red)"/>
+  <path d="M 602 425 H 195 V 386" fill="none" stroke="#ff6b62" stroke-width="2.5" marker-end="url(#red)"/>
+  <text x="659" y="417" fill="#ff6b62" font-size="16" font-weight="400" font-family="Arial, Helvetica, sans-serif">G = gradient of output</text>
+  <rect x="44" y="456" width="540" height="128" rx="16" fill="#182a29" stroke="#305c51" stroke-width="1.5"/>
+  <text x="65" y="490" fill="#62dfbb" font-size="19" font-weight="700" font-family="Arial, Helvetica, sans-serif">For each valid forward contribution</text>
+  <text x="65" y="524" fill="#f0f5fc" font-size="22" font-weight="400" font-family="Arial, Helvetica, sans-serif">Y[y] += X[x] * W[w]</text>
+  <text x="65" y="557" fill="#aabbd0" font-size="15" font-weight="400" font-family="Arial, Helvetica, sans-serif">Indices account for batch, channels, stride and padding.</text>
+  <rect x="608" y="456" width="548" height="128" rx="16" fill="#302126" stroke="#6b4147" stroke-width="1.5"/>
+  <text x="630" y="490" fill="#ff6b62" font-size="19" font-weight="700" font-family="Arial, Helvetica, sans-serif">Accumulate the local derivatives</text>
+  <text x="630" y="524" fill="#f0f5fc" font-size="21" font-weight="400" font-family="Arial, Helvetica, sans-serif">dX[x] += G[y] * W[w]</text>
+  <text x="630" y="557" fill="#f0f5fc" font-size="21" font-weight="400" font-family="Arial, Helvetica, sans-serif">dW[w] += G[y] * X[x]</text>
+  <text x="44" y="620" fill="#aabbd0" font-size="17" font-weight="400" font-family="Arial, Helvetica, sans-serif">Activation tensors and gradients are available. A Grad-CAM heatmap is not implemented yet.</text>
+</svg>

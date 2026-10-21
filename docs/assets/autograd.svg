@@ -1,0 +1,51 @@
+<?xml version="1.0" ?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="603" viewBox="0 0 1200 603" role="img" aria-labelledby="title desc">
+  <title id="title">Shared-node reverse-mode automatic differentiation</title>
+  <desc id="desc">a=[1,2] and b=[3,4] produce s=[4,6]. Multiplying s by itself records two edges to s. The sum loss is 52. Backward accumulates both contributions, yielding gradients [8,12] for a and b.</desc>
+  <defs>
+    <marker id="mint" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#62dfbb"/>
+    </marker>
+    <marker id="red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6b62"/>
+    </marker>
+    <marker id="blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#83b9ff"/>
+    </marker>
+  </defs>
+  <rect width="1200" height="603" rx="20" fill="#0b1220"/>
+  <text x="44" y="49" fill="#62dfbb" font-size="14" font-weight="700" font-family="Arial, Helvetica, sans-serif">02 / AUTOGRAD</text>
+  <text x="44" y="94" fill="#f0f5fc" font-size="34" font-weight="700" font-family="Arial, Helvetica, sans-serif">One node. Every contribution.</text>
+  <text x="44" y="129" fill="#aabbd0" font-size="19" font-weight="400" font-family="Arial, Helvetica, sans-serif">L = sum((a + b) * (a + b))    |    a = [1, 2], b = [3, 4]</text>
+  <path d="M 248 225 H 298 V 290 H 337" fill="none" stroke="#62dfbb" stroke-width="2.5" marker-end="url(#mint)"/>
+  <path d="M 248 371 H 298 V 310 H 337" fill="none" stroke="#62dfbb" stroke-width="2.5" marker-end="url(#mint)"/>
+  <path d="M 537 277 H 630" fill="none" stroke="#62dfbb" stroke-width="2.5" marker-end="url(#mint)"/>
+  <path d="M 537 325 H 630" fill="none" stroke="#62dfbb" stroke-width="2.5" marker-end="url(#mint)"/>
+  <path d="M 830 300 H 922" fill="none" stroke="#62dfbb" stroke-width="2.5" marker-end="url(#mint)"/>
+  <text x="555" y="257" fill="#aabbd0" font-size="13" font-weight="400" font-family="Arial, Helvetica, sans-serif">left edge</text>
+  <text x="555" y="354" fill="#aabbd0" font-size="13" font-weight="400" font-family="Arial, Helvetica, sans-serif">right edge</text>
+  <rect x="44" y="178" width="204" height="94" rx="16" fill="#121e30" stroke="#2a3b51" stroke-width="1.5"/>
+  <text x="64" y="213" fill="#f0f5fc" font-size="23" font-weight="700" font-family="Arial, Helvetica, sans-serif">a</text>
+  <text x="64" y="250" fill="#62dfbb" font-size="19" font-weight="400" font-family="Arial, Helvetica, sans-serif">[1, 2]</text>
+  <rect x="44" y="324" width="204" height="94" rx="16" fill="#121e30" stroke="#2a3b51" stroke-width="1.5"/>
+  <text x="64" y="359" fill="#f0f5fc" font-size="23" font-weight="700" font-family="Arial, Helvetica, sans-serif">b</text>
+  <text x="64" y="396" fill="#62dfbb" font-size="19" font-weight="400" font-family="Arial, Helvetica, sans-serif">[3, 4]</text>
+  <rect x="338" y="246" width="199" height="108" rx="16" fill="#121e30" stroke="#2a3b51" stroke-width="1.5"/>
+  <text x="358" y="281" fill="#f0f5fc" font-size="23" font-weight="700" font-family="Arial, Helvetica, sans-serif">s = a + b</text>
+  <text x="358" y="318" fill="#62dfbb" font-size="19" font-weight="400" font-family="Arial, Helvetica, sans-serif">[4, 6]</text>
+  <rect x="631" y="246" width="199" height="108" rx="16" fill="#121e30" stroke="#2a3b51" stroke-width="1.5"/>
+  <text x="651" y="281" fill="#f0f5fc" font-size="23" font-weight="700" font-family="Arial, Helvetica, sans-serif">q = s * s</text>
+  <text x="651" y="318" fill="#62dfbb" font-size="19" font-weight="400" font-family="Arial, Helvetica, sans-serif">[16, 36]</text>
+  <rect x="923" y="246" width="233" height="108" rx="16" fill="#121e30" stroke="#2a3b51" stroke-width="1.5"/>
+  <text x="943" y="281" fill="#f0f5fc" font-size="23" font-weight="700" font-family="Arial, Helvetica, sans-serif">L = sum(q)</text>
+  <text x="943" y="318" fill="#62dfbb" font-size="19" font-weight="400" font-family="Arial, Helvetica, sans-serif">52</text>
+  <path d="M 1037 363 V 438 H 738 V 363" fill="none" stroke="#ff6b62" stroke-width="2.5" marker-end="url(#red)"/>
+  <text x="856" y="425" fill="#ff6b62" font-size="16" font-weight="400" font-family="Arial, Helvetica, sans-serif">dL/dq = [1, 1]</text>
+  <path d="M 720 363 V 487 H 436 V 363" fill="none" stroke="#ff6b62" stroke-width="2.5" marker-end="url(#red)"/>
+  <text x="459" y="474" fill="#ff6b62" font-size="17" font-weight="400" font-family="Arial, Helvetica, sans-serif">dL/ds = [8, 12]</text>
+  <rect x="44" y="490" width="291" height="76" rx="16" fill="#302126" stroke="#6b4147" stroke-width="1.5"/>
+  <text x="62" y="520" fill="#ff6b62" font-size="18" font-weight="700" font-family="Arial, Helvetica, sans-serif">dL/da = dL/db = [8, 12]</text>
+  <text x="62" y="548" fill="#aabbd0" font-size="15" font-weight="400" font-family="Arial, Helvetica, sans-serif">Both paths contribute to s.</text>
+  <text x="389" y="551" fill="#62dfbb" font-size="16" font-weight="400" font-family="Arial, Helvetica, sans-serif">Forward: record parents</text>
+  <text x="703" y="551" fill="#ff6b62" font-size="16" font-weight="400" font-family="Arial, Helvetica, sans-serif">Backward: accumulate in reverse order</text>
+</svg>

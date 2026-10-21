@@ -1,0 +1,15 @@
+[build-system]
+requires = ["maturin>=1.9.4,<2"]
+build-backend = "maturin"
+
+[project]
+name = "katsu"
+dynamic = ["version"]
+requires-python = ">=3.10"
+description = "Rust tensor foundation for explainable deep learning"
+license = "MIT"
+
+[tool.maturin]
+manifest-path = "crates/katsu-python/Cargo.toml"
+python-source = "python"
+module-name = "katsu._native"

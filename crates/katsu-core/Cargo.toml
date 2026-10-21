@@ -1,0 +1,6 @@
+[package]
+name = "katsu-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "CPU tensor foundation for Katsu"

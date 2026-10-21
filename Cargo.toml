@@ -1,0 +1,17 @@
+[workspace]
+members = ["crates/katsu-core", "crates/katsu-python"]
+default-members = ["crates/katsu-core"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+katsu-core = { path = "crates/katsu-core", version = "0.1.0" }
+pyo3 = "0.29.3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

@@ -1,0 +1,41 @@
+<?xml version="1.0" ?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="380" viewBox="0 0 1200 380" role="img" aria-labelledby="title desc">
+  <title id="title">Katsu — Rust tensor engine</title>
+  <desc id="desc">Technical preview. CPU f32 tensor engine with autograd and Conv2D. An abstract graph illustrates forward operations and backward gradients.</desc>
+  <defs>
+    <marker id="mint" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#62dfbb"/>
+    </marker>
+    <marker id="red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6b62"/>
+    </marker>
+    <marker id="blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#83b9ff"/>
+    </marker>
+  </defs>
+  <rect width="1200" height="380" rx="20" fill="#0b1220"/>
+  <text x="52" y="55" fill="#62dfbb" font-size="14" font-weight="700" font-family="Arial, Helvetica, sans-serif">KATSU  /  OPEN SOURCE</text>
+  <text x="48" y="157" fill="#f0f5fc" font-size="88" font-weight="700" font-family="Arial, Helvetica, sans-serif">KATSU</text>
+  <text x="53" y="213" fill="#f0f5fc" font-size="27" font-weight="400" font-family="Arial, Helvetica, sans-serif">Build the core. Inspect the gradients.</text>
+  <text x="53" y="251" fill="#aabbd0" font-size="19" font-weight="400" font-family="Arial, Helvetica, sans-serif">Rust tensors · Reverse-mode autograd · Conv2D</text>
+  <rect x="53" y="299" width="164" height="35" rx="17" fill="#21312e" stroke="#365c50" stroke-width="1.5"/>
+  <text x="70" y="322" fill="#62dfbb" font-size="12" font-weight="700" font-family="Arial, Helvetica, sans-serif">TECHNICAL PREVIEW</text>
+  <text x="238" y="322" fill="#aabbd0" font-size="14" font-weight="400" font-family="Arial, Helvetica, sans-serif">CPU / f32 / MIT</text>
+  <path d="M 828 111 L 959 178" fill="none" stroke="#83b9ff" stroke-width="2.5"/>
+  <path d="M 828 247 L 959 178" fill="none" stroke="#83b9ff" stroke-width="2.5"/>
+  <path d="M 969 178 L 1095 112" fill="none" stroke="#83b9ff" stroke-width="2.5"/>
+  <path d="M 969 178 L 1095 247" fill="none" stroke="#83b9ff" stroke-width="2.5"/>
+  <path d="M 1074 273 Q 950 340 849 275" fill="none" stroke="#ff6b62" stroke-width="2.5" marker-end="url(#red)"/>
+  <text x="898" y="338" fill="#ff6b62" font-size="14" font-weight="400" font-family="Arial, Helvetica, sans-serif">backward</text>
+  <rect x="803" y="86" width="58" height="58" rx="14" fill="#121e30" stroke="#83b9ff" stroke-width="1.5"/>
+  <text x="820" y="123" fill="#f0f5fc" font-size="22" font-weight="700" font-family="Arial, Helvetica, sans-serif">x</text>
+  <rect x="803" y="222" width="58" height="58" rx="14" fill="#121e30" stroke="#83b9ff" stroke-width="1.5"/>
+  <text x="820" y="259" fill="#f0f5fc" font-size="22" font-weight="700" font-family="Arial, Helvetica, sans-serif">w</text>
+  <rect x="940" y="153" width="58" height="58" rx="14" fill="#121e30" stroke="#83b9ff" stroke-width="1.5"/>
+  <text x="957" y="190" fill="#f0f5fc" font-size="22" font-weight="700" font-family="Arial, Helvetica, sans-serif">op</text>
+  <rect x="1080" y="87" width="58" height="58" rx="14" fill="#121e30" stroke="#83b9ff" stroke-width="1.5"/>
+  <text x="1097" y="124" fill="#f0f5fc" font-size="22" font-weight="700" font-family="Arial, Helvetica, sans-serif">y</text>
+  <rect x="1080" y="222" width="58" height="58" rx="14" fill="#121e30" stroke="#83b9ff" stroke-width="1.5"/>
+  <text x="1097" y="259" fill="#f0f5fc" font-size="22" font-weight="700" font-family="Arial, Helvetica, sans-serif">L</text>
+  <path d="M 733 315 L 774 70" fill="none" stroke="#ff6b62" stroke-width="2.5"/>
+</svg>
