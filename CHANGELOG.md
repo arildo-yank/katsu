@@ -11,9 +11,9 @@ A versão nos manifests é 0.1.0. Ainda não foi estabelecida uma release public
 - Grafo dinâmico com autograd reverso, VJP e acumulação de gradientes.
 - Conv2D NCHW/OIHW com stride, padding e derivadas de entrada/pesos.
 - Acesso ao mapa de ativação e limpeza do cache da camada.
-- GPT de caracteres (`GptConfig`, `CharTokenizer`), geração com temperatura,
-  checkpoint binário (`save_params`/`load_params`) e exemplo `gpt_pt`.
-- Matmul e seu backward com laços vetorizáveis: ~11× mais rápido no treino do GPT.
+- Katsu LM, modelo de linguagem de caracteres (`KatsuLmConfig`, `CharTokenizer`), geração com temperatura,
+  checkpoint binário (`save_params`/`load_params`) e exemplo `katsu_lm`.
+- Matmul e seu backward com laços vetorizáveis: ~11× mais rápido no treino do Katsu LM.
 - 46 testes de integração, incluindo diferenças finitas, grafo profundo e convergência.
 - Broadcasting em `add`/`mul`; `transpose`, `reshape`, `gelu`, `softmax`, `log_softmax`,
   `layer_norm`, `cross_entropy`, `one_hot`, `causal_mask` e `scalar`.

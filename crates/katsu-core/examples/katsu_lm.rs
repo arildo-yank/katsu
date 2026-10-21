@@ -1,10 +1,10 @@
-//! Treina um GPT de caracteres em um texto em português.
+//! Treina o Katsu LM, modelo de linguagem de caracteres, em um texto em português.
 //!
-//!   cargo run --release -p katsu-core --example gpt_pt -- <corpus.txt> [metrics.jsonl] [passos]
+//!   cargo run --release -p katsu-core --example katsu_lm -- <corpus.txt> [metrics.jsonl] [passos]
 //!
 //! - Cada passo grava uma linha JSON (contrato do monitor arandu) com flush imediato.
 //! - A cada 100 passos imprime a perda de validação e uma amostra de texto em stderr.
-//! - Ao final salva os pesos em `<metrics>.ckpt` (ou `gpt_pt.ckpt`).
+//! - Ao final salva os pesos em `<metrics>.ckpt` (ou `katsu-lm-v0.ckpt`).
 //! - Textos do Project Gutenberg têm o cabeçalho/rodapé da licença removidos.
 use std::{
     fs::{self, File},
@@ -12,7 +12,7 @@ use std::{
     time::Instant,
 };
 
-use katsu_core::{fit, save_params, Adam, CharTokenizer, GptConfig, SplitMix64};
+use katsu_core::{fit, save_params, Adam, CharTokenizer, KatsuLmConfig, SplitMix64};
 
 const BATCH: usize = 8;
 
@@ -36,7 +36,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let corpus_path = args
         .next()
-        .ok_or("uso: gpt_pt <corpus.txt> [metrics.jsonl] [passos]")?;
+        .ok_or("uso: katsu_lm <corpus.txt> [metrics.jsonl] [passos]")?;
     let metrics_path = args.next();
     let steps: usize = args.next().map(|s| s.parse()).transpose()?.unwrap_or(2000);
 
@@ -45,7 +45,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ids = tok.encode(&text)?;
     let split = ids.len() * 9 / 10;
     let (train, valid) = ids.split_at(split);
-    let config = GptConfig {
+    let config = KatsuLmConfig {
         vocab_size: tok.vocab_size(),
         block_size: 64,
         embed_dim: 64,
@@ -109,7 +109,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(error) = write_error {
         return Err(error.into());
     }
-    let checkpoint = metrics_path.map_or("gpt_pt.ckpt".to_string(), |m| format!("{m}.ckpt"));
+    let checkpoint = metrics_path.map_or("katsu-lm-v0.ckpt".to_string(), |m| format!("{m}.ckpt"));
     save_params(&params, &mut BufWriter::new(File::create(&checkpoint)?))?;
     eprintln!(
         "pesos salvos em {checkpoint} · {:.1}s no total",

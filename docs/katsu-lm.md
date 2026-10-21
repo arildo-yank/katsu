@@ -1,6 +1,10 @@
-# GPT de caracteres em português
+# Katsu LM: modelo de linguagem em português
 
 [Índice](README.md)
+
+**Katsu LM v0**: modelo próprio do projeto. Código, treino e pesos são feitos aqui,
+sem pesos ou bibliotecas de terceiros; os dados são textos brasileiros em domínio público.
+A arquitetura segue a família transformer, técnica publicada abertamente.
 
 O primeiro modelo de linguagem do Katsu: um transformer decoder-only que aprende a
 prever o próximo caractere. Tudo em Rust, sem dependências, sobre o mesmo autograd.
@@ -14,7 +18,7 @@ tokens → one_hot @ wte  +  one_hot(posições) @ wpe
        → LayerNorm → @ cabeça → logits [t, vocabulário]
 ```
 
-| Item | Valor no exemplo `gpt_pt` |
+| Item | Valor no exemplo `katsu_lm` |
 | --- | --- |
 | Contexto (`block_size`) | 64 caracteres |
 | Largura (`embed_dim`) | 64 |
@@ -32,7 +36,7 @@ Com um texto em domínio público, por exemplo *Dom Casmurro* (Machado de Assis,
 Project Gutenberg #55752) salvo em `corpus/dom-casmurro.txt`:
 
 ```sh
-cargo run --release -p katsu-core --example gpt_pt -- corpus/dom-casmurro.txt metrics.jsonl 2000
+cargo run --release -p katsu-core --example katsu_lm -- corpus/dom-casmurro.txt metrics.jsonl 2000
 ```
 
 - `metrics.jsonl`: uma linha JSON por passo; o monitor arandu (`/dev`) lê esse arquivo ao vivo.
@@ -49,7 +53,7 @@ Use `--release`: em debug o treino é ~10× mais lento.
 | --- | --- |
 | `CharTokenizer::from_text(&str)` | Vocabulário ordenado dos caracteres do texto |
 | `encode(&str)` / `decode(&[usize])` | `IndexOutOfRange` para caractere fora do vocabulário |
-| `GptConfig { vocab_size, block_size, embed_dim, layers }` | Hiperparâmetros |
+| `KatsuLmConfig { vocab_size, block_size, embed_dim, layers }` | Hiperparâmetros |
 | `init(seed)` | `Vec<Tensor>` de parâmetros, no layout esperado |
 | `forward(params, tokens)` | Logits `[t, vocab]`, 1 ≤ t ≤ block_size |
 | `loss(params, windows)` | Entropia cruzada média do próximo caractere |
@@ -59,7 +63,7 @@ Use `--release`: em debug o treino é ~10× mais lento.
 
 ## Verificação
 
-[tests/gpt.rs](../crates/katsu-core/tests/gpt.rs): tokenizer com acentos, shapes e contagem
+[tests/lm.rs](../crates/katsu-core/tests/lm.rs): tokenizer com acentos, shapes e contagem
 de parâmetros, perda inicial ≈ ln(vocabulário), causalidade (tokens futuros não
 alteram logits passados), gradientes conferidos por diferenças finitas, treino que
 aprende a completar uma frase, geração reproduzível e checkpoint ida e volta.

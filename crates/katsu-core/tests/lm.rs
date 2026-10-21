@@ -1,4 +1,4 @@
-use katsu_core::{fit, Adam, CharTokenizer, GptConfig, SplitMix64, Tensor, TensorError};
+use katsu_core::{fit, Adam, CharTokenizer, KatsuLmConfig, SplitMix64, Tensor, TensorError};
 
 type Result<T> = std::result::Result<T, TensorError>;
 
@@ -6,8 +6,8 @@ type Result<T> = std::result::Result<T, TensorError>;
 const TEXT: &str = "o sabiá canta na palmeira. a palmeira balança ao vento. \
 o vento leva o canto do sabiá até o rio.";
 
-fn tiny(vocab_size: usize) -> GptConfig {
-    GptConfig {
+fn tiny(vocab_size: usize) -> KatsuLmConfig {
+    KatsuLmConfig {
         vocab_size,
         block_size: 8,
         embed_dim: 8,
@@ -104,7 +104,7 @@ fn gradient_of_one_weight_matches_finite_difference() -> Result<()> {
 fn learns_to_continue_a_portuguese_sentence() -> Result<()> {
     let tok = CharTokenizer::from_text(TEXT);
     let ids = tok.encode(TEXT)?;
-    let config = GptConfig {
+    let config = KatsuLmConfig {
         vocab_size: tok.vocab_size(),
         block_size: 16,
         embed_dim: 24,

@@ -1,7 +1,7 @@
-//! GPT de caracteres: transformer decoder-only, uma cabeça de atenção por camada.
+//! Katsu LM: modelo de linguagem de caracteres, transformer decoder-only, uma cabeça de atenção por camada.
 //!
 //! Os parâmetros são um `Vec<Tensor>` plano (o formato que `fit` e os otimizadores
-//! usam); `GptConfig` define o layout. Cada sequência passa pelo grafo como uma
+//! usam); `KatsuLmConfig` define o layout. Cada sequência passa pelo grafo como uma
 //! matriz `[t, d]`: embeddings e posições entram por `one_hot @ tabela`, sem
 //! operação de indexação dedicada.
 use std::collections::BTreeSet;
@@ -53,7 +53,7 @@ impl CharTokenizer {
 
 /// Hiperparâmetros do modelo.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct GptConfig {
+pub struct KatsuLmConfig {
     pub vocab_size: usize,
     /// Comprimento máximo de contexto (tabela de posições).
     pub block_size: usize,
@@ -77,7 +77,7 @@ const W2: usize = 10;
 const B2: usize = 11;
 const PER_LAYER: usize = 12;
 
-impl GptConfig {
+impl KatsuLmConfig {
     fn validate(&self) -> Result<()> {
         if self.vocab_size == 0 || self.block_size == 0 || self.embed_dim == 0 {
             return Err(TensorError::InvalidShape(
@@ -132,7 +132,9 @@ impl GptConfig {
 
     fn check_params(&self, params: &[Tensor]) -> Result<()> {
         if params.len() != self.param_tensors() {
-            return Err(TensorError::InvalidShape("params do not match GptConfig"));
+            return Err(TensorError::InvalidShape(
+                "params do not match KatsuLmConfig",
+            ));
         }
         Ok(())
     }

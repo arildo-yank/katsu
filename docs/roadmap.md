@@ -37,9 +37,9 @@ perda dentro de tolerâncias documentadas. Ter backward não basta para concluir
 
 Crescimento gradual, cada etapa com algo demonstrável:
 
-1. **Katsu fala português** *(em andamento)*: GPT de caracteres treinado no Mac com textos
+1. **Katsu fala português** *(em andamento)*: Katsu LM, de caracteres, treinado no Mac com textos
    brasileiros em domínio público, loss ao vivo no monitor arandu. Feito: modelo,
-   geração, checkpoint e exemplo `gpt_pt` (~110 mil parâmetros). Falta: várias cabeças,
+   geração, checkpoint e exemplo `katsu_lm` (~110 mil parâmetros). Falta: várias cabeças,
    tokenizer BPE e chegar a milhões de parâmetros.
 2. **Desempenho**: matmul blocado/SIMD, threads (`Arc` + `rayon`), f16 e quantização int8.
 3. **Inferência de pesos abertos**: carregar safetensors e gerar texto no chat do Arandu.

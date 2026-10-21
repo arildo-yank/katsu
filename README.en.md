@@ -49,7 +49,7 @@ This computes gradients, not a complete training loop.
 - SGD optimizer, a minimal `fit` loop, ReLU and per-epoch JSON Lines metrics.
 - Broadcasting add/mul, transpose, reshape, softmax, log-softmax, LayerNorm, GELU,
   causal mask, cross-entropy and the Adam optimizer: the building blocks of a transformer.
-- A character-level GPT trained on Portuguese text, with sampling and checkpoints.
+- Katsu LM: a character-level language model trained on Portuguese text, with sampling and checkpoints.
 - 46 core tests, including finite-difference checks of matrix and convolution gradients.
 
 ![Architecture and implementation status](docs/assets/architecture.svg)
