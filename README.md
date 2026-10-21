@@ -55,6 +55,7 @@ O [arquivo executável](crates/katsu-core/examples/autograd.rs) também imprime 
 | Visão | Conv2D NCHW, stride, padding, dX e dW | Bias, groups, dilation, pooling |
 | Explicabilidade | Acesso às ativações e seus gradientes | Grad-CAM e heatmaps |
 | Python | Estrutura PyO3/Maturin; módulo de versão | `katsu.Tensor`, wheels publicados |
+| Linguagem | GPT de caracteres em português, geração e checkpoint ([guia](docs/gpt.md)) | Várias cabeças, tokenizer BPE, lote em matmul |
 | Treinamento | SGD, Adam, loop `fit`, métricas JSON por época ([guia](docs/training.md)) | Mini-batches, agendamento de lr, gradient clipping |
 | Execução | CPU, single-thread, Rust seguro | GPU, paralelismo, backend HTTP |
 
@@ -84,6 +85,7 @@ não é `Send`/`Sync`. Leia a [arquitetura e os limites](docs/architecture.md).
 | [Começar](docs/getting-started.md) | Ambiente, comandos, integração Rust e Python experimental |
 | [Referência da API](docs/api.md) | Tensor, Conv2D, Op e todos os erros públicos |
 | [Autograd](docs/autograd.md) | Matemática, ordem topológica, VJP e acumulação |
+| [GPT em português](docs/gpt.md) | Primeiro modelo de linguagem do Katsu: treino, geração e checkpoint |
 | [Treinamento](docs/training.md) | SGD, loop `fit` e contrato JSON com o monitor arandu |
 | [Conv2D](docs/conv2d.md) | Layout, derivadas, cache e caminho para Grad-CAM |
 | [Testes e validação](docs/testing.md) | Evidências, reprodução offline, CI e limitações |
@@ -102,7 +104,7 @@ single-thread cujo limite de escala está documentado em [arquitetura](docs/arch
 
 ## Validação e licença
 
-Há **38 testes de integração** do core: 6 de Tensor, 8 de Autograd, 7 de Conv2D, 6 de Treinamento e 11 de operações de transformer (incluindo um bloco de atenção causal verificado por diferenças finitas).
+Há **46 testes de integração** do core: 6 de Tensor, 8 de Autograd, 7 de Conv2D, 6 de Treinamento, 11 de operações de transformer e 8 do GPT de caracteres.
 A verificação local via `rustc` passou, incluindo diferenças finitas. O workflow
 [GitHub Actions](.github/workflows/ci.yml) está configurado; sua execução remota
 não foi verificada. O workspace Python completo ainda não foi validado.

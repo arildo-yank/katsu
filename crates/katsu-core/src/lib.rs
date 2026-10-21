@@ -12,3 +12,6 @@ pub use ops::LAYER_NORM_EPS;
 
 mod optim;
 pub use optim::{fit, Adam, EpochMetrics, Optimizer, Sgd};
+
+mod gpt;
+pub use gpt::{load_params, save_params, CharTokenizer, GptConfig, SplitMix64};

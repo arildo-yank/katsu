@@ -335,10 +335,12 @@ impl Tensor {
         }
         let mut data = zeros_buffer(element_count(&[m, n])?)?;
         if !data.is_empty() && k != 0 {
-            for i in 0..m {
-                for p in 0..k {
-                    for j in 0..n {
-                        data[i * n + j] += self.data()[i * k + p] * rhs.data()[p * n + j];
+            // Linhas como fatias: sem checagem de índice no laço interno, o
+            // compilador vetoriza o axpy (SIMD).
+            for (out, a_row) in data.chunks_exact_mut(n).zip(self.data().chunks_exact(k)) {
+                for (&a, b_row) in a_row.iter().zip(rhs.data().chunks_exact(n)) {
+                    for (o, &b) in out.iter_mut().zip(b_row) {
+                        *o += a * b;
                     }
                 }
             }
@@ -437,6 +439,25 @@ impl Tensor {
     }
 }
 
+/// Produto interno com 8 acumuladores independentes, para o compilador vetorizar
+/// (somas em f32 não são associativas, então ele não reordena sozinho).
+fn dot(a: &[f32], b: &[f32]) -> f32 {
+    let mut lanes = [0.0f32; 8];
+    let (a_chunks, b_chunks) = (a.chunks_exact(8), b.chunks_exact(8));
+    let tail: f32 = a_chunks
+        .remainder()
+        .iter()
+        .zip(b_chunks.remainder())
+        .map(|(x, y)| x * y)
+        .sum();
+    for (x, y) in a_chunks.zip(b_chunks) {
+        for lane in 0..8 {
+            lanes[lane] += x[lane] * y[lane];
+        }
+    }
+    lanes.iter().sum::<f32>() + tail
+}
+
 /// Buffer de adjunto do nó, criado com zeros na primeira contribuição.
 fn adjoint<'a>(
     pending: &'a mut HashMap<*const TensorNode, Vec<f32>>,
@@ -520,27 +541,27 @@ impl Op {
             }
             Self::Matmul => {
                 let (a, b) = (&node.parents()[0], &node.parents()[1]);
-                let (m, k, n) = (a.shape()[0], a.shape()[1], b.shape()[1]);
+                let (k, n) = (a.shape()[1], b.shape()[1]);
                 if g.is_empty() || k == 0 {
                     return Ok(());
                 }
                 // dA = G @ B^T; dB = A^T @ G, sem materializar transpostas.
                 {
                     let da = adjoint(pending, a)?;
-                    for i in 0..m {
-                        for p in 0..k {
-                            for j in 0..n {
-                                da[i * k + p] += g[i * n + j] * b.data()[p * n + j];
-                            }
+                    // dA[i,p] = <G[i,:], B[p,:]>
+                    for (da_row, g_row) in da.chunks_exact_mut(k).zip(g.chunks_exact(n)) {
+                        for (out, b_row) in da_row.iter_mut().zip(b.data().chunks_exact(n)) {
+                            *out += dot(g_row, b_row);
                         }
                     }
                 }
                 {
                     let db = adjoint(pending, b)?;
-                    for i in 0..m {
-                        for p in 0..k {
-                            for j in 0..n {
-                                db[p * n + j] += a.data()[i * k + p] * g[i * n + j];
+                    // dB[p,:] += A[i,p] * G[i,:]
+                    for (a_row, g_row) in a.data().chunks_exact(k).zip(g.chunks_exact(n)) {
+                        for (&scale, db_row) in a_row.iter().zip(db.chunks_exact_mut(n)) {
+                            for (out, &value) in db_row.iter_mut().zip(g_row) {
+                                *out += scale * value;
                             }
                         }
                     }
