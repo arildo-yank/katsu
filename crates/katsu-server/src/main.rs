@@ -34,6 +34,12 @@ struct Generate {
     repetition_penalty: f32,
     #[serde(default)]
     seed: u64,
+    /// false gera exatamente max_new_tokens, ignorando <|end|>: medição de velocidade.
+    #[serde(default = "default_stop_at_end")]
+    stop_at_end: bool,
+}
+fn default_stop_at_end() -> bool {
+    true
 }
 fn default_count() -> usize {
     64
@@ -75,9 +81,9 @@ async fn generate(
   let _permit=permit;
   let ids=model.tokenizer.encode(&req.prompt);let n=ids.len();
   let stop=model.tokenizer.special_token_id("<|end|>").map(|id|vec![id]).unwrap_or_else(||model.tokenizer.encode("\n<|end|>"));
-  let options=GenerationOptions{temperature:req.temperature,repetition_penalty:req.repetition_penalty,seed:req.seed,stop_tokens:stop.clone()};
+  let options=GenerationOptions{temperature:req.temperature,repetition_penalty:req.repetition_penalty,seed:req.seed,stop_tokens:if req.stop_at_end {stop.clone()} else {Vec::new()}};
   let tokens=model.config.generate_with_options(&model.params,&ids,req.max_new_tokens,&options).map_err(|e|error(StatusCode::INTERNAL_SERVER_ERROR,&e.to_string()))?;
-  let stopped=tokens[n..].ends_with(&stop);
+  let stopped=req.stop_at_end&&tokens[n..].ends_with(&stop);
   let end=if stopped {tokens.len()-stop.len()} else {tokens.len()};
   let bytes=model.tokenizer.decode_bytes(&tokens[n..end]).map_err(|e|error(StatusCode::INTERNAL_SERVER_ERROR,&e.to_string()))?;
   let valid_utf8=std::str::from_utf8(&bytes).is_ok();
@@ -226,6 +232,14 @@ mod tests {
             layers,
             heads,
         }
+    }
+    #[test]
+    fn stop_at_end_defaults_to_true() {
+        let chat: Generate = serde_json::from_str(r#"{"prompt":"oi"}"#).unwrap();
+        assert!(chat.stop_at_end);
+        let bench: Generate =
+            serde_json::from_str(r#"{"prompt":"oi","stop_at_end":false}"#).unwrap();
+        assert!(!bench.stop_at_end);
     }
     #[test]
     fn shapes_match_init() {
