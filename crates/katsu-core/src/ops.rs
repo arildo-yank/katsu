@@ -9,8 +9,8 @@ type Result<T> = std::result::Result<T, TensorError>;
 
 /// Épsilon da LayerNorm, como no PyTorch.
 pub const LAYER_NORM_EPS: f32 = 1e-5;
-const GELU_C: f32 = 0.797_884_6; // sqrt(2/pi)
-const GELU_K: f32 = 0.044_715;
+pub(crate) const GELU_C: f32 = 0.797_884_6; // sqrt(2/pi)
+pub(crate) const GELU_K: f32 = 0.044_715;
 
 /// Shape resultante pelas regras do NumPy: alinha à direita; dimensão 1 expande.
 pub(crate) fn broadcast_shape(a: &[usize], b: &[usize]) -> Result<Vec<usize>> {
@@ -114,23 +114,26 @@ impl Tensor {
         Self::new(data, &[size, size])
     }
 
-    /// Transposta de uma matriz `[m, n] -> [n, m]` (copia os dados).
+    /// Transpõe as duas últimas dimensões de uma matriz ou batch (copia os dados).
     pub fn transpose(&self) -> Result<Self> {
-        let &[m, n] = self.shape() else {
-            return Err(TensorError::InvalidShape("transpose needs rank 2"));
-        };
+        if self.rank() < 2 {
+            return Err(TensorError::InvalidShape("transpose needs rank >= 2"));
+        }
+        let rank = self.rank();
+        let (m, n) = (self.shape()[rank - 2], self.shape()[rank - 1]);
+        let mut shape = self.shape().to_vec();
+        shape.swap(rank - 2, rank - 1);
         let mut data = zeros_buffer(self.numel())?;
-        for i in 0..m {
-            for j in 0..n {
-                data[j * m + i] = self.data()[i * n + j];
+        if m != 0 && n != 0 {
+            for (out, input) in data.chunks_mut(m * n).zip(self.data().chunks(m * n)) {
+                for i in 0..m {
+                    for j in 0..n {
+                        out[j * m + i] = input[i * n + j];
+                    }
+                }
             }
         }
-        Ok(Self::node(
-            data,
-            vec![n, m],
-            Op::Transpose,
-            vec![self.clone()],
-        ))
+        Ok(Self::node(data, shape, Op::Transpose, vec![self.clone()]))
     }
 
     /// Mesmos dados com outro shape; a quantidade de elementos precisa coincidir.
@@ -194,6 +197,14 @@ impl Tensor {
 
     /// Entropia cruzada média de logits `[n, classes]` contra índices de classe.
     pub fn cross_entropy(&self, targets: &[usize]) -> Result<Self> {
+        self.cross_entropy_with_backend(targets, std::sync::Arc::new(crate::CpuBackend::default()))
+    }
+
+    pub fn cross_entropy_with_backend(
+        &self,
+        targets: &[usize],
+        backend: std::sync::Arc<dyn crate::Backend>,
+    ) -> Result<Self> {
         let &[n, classes] = self.shape() else {
             return Err(TensorError::InvalidShape(
                 "cross_entropy needs [n, classes] logits",
@@ -205,11 +216,12 @@ impl Tensor {
                 actual: targets.len(),
             });
         }
-        let picked = self
-            .log_softmax()?
-            .mul(&Self::one_hot(targets, classes)?)?
-            .sum()?;
-        picked.mul(&Self::scalar(-1.0 / n.max(1) as f32)?)
+        let loss = backend.cross_entropy(self.data(), targets, classes)?;
+        Ok(
+            Self::node(vec![loss], vec![], Op::CrossEntropy, vec![self.clone()])
+                .with_indices(targets)
+                .with_backend(backend),
+        )
     }
 
     fn unary(&self, data: Vec<f32>, op: Op) -> Self {
@@ -254,10 +266,15 @@ pub(crate) fn unary_backward(
             }
         }
         Op::Transpose => {
-            let (m, n) = (parent.shape()[0], parent.shape()[1]);
-            for i in 0..m {
-                for j in 0..n {
-                    target[i * n + j] += g[j * m + i];
+            let rank = parent.rank();
+            let (m, n) = (parent.shape()[rank - 2], parent.shape()[rank - 1]);
+            if m != 0 && n != 0 {
+                for (out, gr) in target.chunks_mut(m * n).zip(g.chunks(m * n)) {
+                    for i in 0..m {
+                        for j in 0..n {
+                            out[i * n + j] += gr[j * m + i];
+                        }
+                    }
                 }
             }
         }

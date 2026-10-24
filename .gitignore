@@ -7,3 +7,8 @@ __pycache__/
 *.jsonl
 *.ckpt
 /corpus/
+
+/runs/
+*.bpe
+
+/data/corpus-bilingual-*/

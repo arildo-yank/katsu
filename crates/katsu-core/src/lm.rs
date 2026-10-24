@@ -5,11 +5,13 @@
 //! usam); `KatsuLmConfig` define o layout. Cada sequência passa pelo grafo como uma
 //! matriz `[t, d]`: embeddings e posições entram por `one_hot @ tabela`, sem
 //! operação de indexação dedicada.
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, sync::Arc};
 
-use crate::{Tensor, TensorError};
+use crate::{Backend, CpuBackend, Tensor, TensorError};
 
 type Result<T> = std::result::Result<T, TensorError>;
+
+mod infer;
 
 /// Vocabulário de caracteres, ordenado para ser reproduzível.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,6 +76,44 @@ const LN1_G: usize = 0;
 const LN1_B: usize = 1;
 const HEAD_START: usize = 2;
 const PER_HEAD: usize = 4;
+
+/// Configuração de amostragem; stop_tokens são IDs reais do tokenizer carregado.
+#[derive(Debug, Clone)]
+pub struct GenerationOptions {
+    pub temperature: f32,
+    pub repetition_penalty: f32,
+    pub seed: u64,
+    pub stop_tokens: Vec<usize>,
+}
+impl Default for GenerationOptions {
+    fn default() -> Self {
+        Self {
+            temperature: 0.7,
+            repetition_penalty: 1.2,
+            seed: 0,
+            stop_tokens: Vec::new(),
+        }
+    }
+}
+/// Penaliza uma vez cada ID já observado; logits negativos ficam mais negativos.
+pub fn penalize_repetitions(logits: &mut [f32], history: &[usize], penalty: f32) -> Result<()> {
+    if !penalty.is_finite() || penalty < 1.0 {
+        return Err(TensorError::InvalidShape(
+            "repetition_penalty must be finite and >= 1",
+        ));
+    }
+    for id in history.iter().copied().collect::<BTreeSet<_>>() {
+        let value = logits.get_mut(id).ok_or(TensorError::InvalidShape(
+            "history token outside vocabulary",
+        ))?;
+        *value = if *value < 0.0 {
+            *value * penalty
+        } else {
+            *value / penalty
+        };
+    }
+    Ok(())
+}
 
 impl KatsuLmConfig {
     fn validate(&self) -> Result<()> {
@@ -150,46 +190,122 @@ impl KatsuLmConfig {
         Ok(())
     }
 
-    /// Logits `[t, vocab]` para uma sequência de até `block_size` tokens.
-    /// A posição i só enxerga tokens 0..=i (máscara causal).
+    /// ~139M com vocabulário 30k (embeddings e cabeça independentes).
+    pub fn native_139m(vocab_size: usize) -> Self {
+        Self {
+            vocab_size,
+            block_size: 512,
+            embed_dim: 768,
+            layers: 13,
+            heads: 12,
+        }
+    }
+
+    /// ~349M com vocabulário 34816; sem alocar pesos ao criar o perfil.
+    pub fn native_349m(vocab_size: usize) -> Self {
+        Self {
+            vocab_size,
+            block_size: 512,
+            embed_dim: 1024,
+            layers: 22,
+            heads: 16,
+        }
+    }
+
+    /// Logits `[t,vocab]`; preserva o layout dos checkpoints v0/v1.
     pub fn forward(&self, params: &[Tensor], tokens: &[usize]) -> Result<Tensor> {
+        self.forward_batch(params, tokens, 1)?
+            .reshape(&[tokens.len(), self.vocab_size])
+    }
+
+    /// Tokens achatados de um batch retangular; logits `[batch,t,vocab]`.
+    pub fn forward_batch(
+        &self,
+        params: &[Tensor],
+        tokens: &[usize],
+        batch: usize,
+    ) -> Result<Tensor> {
+        self.forward_batch_with_backend(params, tokens, batch, Arc::new(CpuBackend::default()))
+    }
+
+    pub fn forward_batch_with_backend(
+        &self,
+        params: &[Tensor],
+        tokens: &[usize],
+        batch: usize,
+        backend: Arc<dyn Backend>,
+    ) -> Result<Tensor> {
         self.check_params(params)?;
-        let t = tokens.len();
-        if t == 0 || t > self.block_size {
+        if batch == 0 || tokens.is_empty() || tokens.len() % batch != 0 {
             return Err(TensorError::InvalidShape(
-                "sequence length must be in 1..=block_size",
+                "batch must be positive and rectangular",
             ));
         }
-        let positions: Vec<usize> = (0..t).collect();
-        let mut x = Tensor::one_hot(tokens, self.vocab_size)?
-            .matmul(&params[0])?
-            .add(&Tensor::one_hot(&positions, self.block_size)?.matmul(&params[1])?)?;
-        let mask = Tensor::causal_mask(t)?;
-        let head_dim = self.embed_dim / self.heads;
-        let scale = Tensor::scalar(1.0 / (head_dim as f32).sqrt())?;
-        let per_layer = self.per_layer();
-        for layer in 0..self.layers {
-            let p = &params[2 + layer * per_layer..2 + (layer + 1) * per_layer];
-            let h = x.layer_norm()?.mul(&p[LN1_G])?.add(&p[LN1_B])?;
-            for w in p[HEAD_START..HEAD_START + self.heads * PER_HEAD].chunks_exact(PER_HEAD) {
-                let (q, k, v) = (h.matmul(&w[0])?, h.matmul(&w[1])?, h.matmul(&w[2])?);
-                let attention = q
-                    .matmul(&k.transpose()?)?
-                    .mul(&scale)?
-                    .add(&mask)?
-                    .softmax()?;
-                x = x.add(&attention.matmul(&v)?.matmul(&w[3])?)?;
-            }
-            let mlp_params = &p[HEAD_START + self.heads * PER_HEAD..];
-            let h = x.layer_norm()?.mul(&mlp_params[0])?.add(&mlp_params[1])?;
-            let mlp = h.matmul(&mlp_params[2])?.add(&mlp_params[3])?.gelu()?;
-            x = x.add(&mlp.matmul(&mlp_params[4])?.add(&mlp_params[5])?)?;
+        let t = tokens.len() / batch;
+        if t > self.block_size {
+            return Err(TensorError::InvalidShape("sequence exceeds block_size"));
         }
-        let head = &params[2 + self.layers * per_layer..];
-        x.layer_norm()?
-            .mul(&head[0])?
-            .add(&head[1])?
-            .matmul(&head[2])
+        let add = |a: &Tensor, b: &Tensor| a.add_with_backend(b, backend.clone());
+        let positions: Vec<usize> = (0..tokens.len()).map(|i| i % t).collect();
+        let mut x = add(
+            &params[0].gather_rows(tokens)?,
+            &params[1].gather_rows(&positions)?,
+        )?;
+        let mask = Tensor::causal_mask(t)?;
+        let dh = self.embed_dim / self.heads;
+        let scale = Tensor::scalar(1.0 / (dh as f32).sqrt())?;
+        let mm = |a: &Tensor, b: &Tensor| a.matmul_with_backend(b, backend.clone());
+        for layer in 0..self.layers {
+            let p = &params[2 + layer * self.per_layer()..2 + (layer + 1) * self.per_layer()];
+            let h = add(&x.layer_norm()?.mul(&p[LN1_G])?, &p[LN1_B])?;
+            for w in p[HEAD_START..HEAD_START + self.heads * PER_HEAD].chunks_exact(PER_HEAD) {
+                let q = mm(&h, &w[0])?.reshape(&[batch, t, dh])?;
+                let k = mm(&h, &w[1])?.reshape(&[batch, t, dh])?;
+                let v = mm(&h, &w[2])?.reshape(&[batch, t, dh])?;
+                let attention = q
+                    .bmm_with_backend(&k.transpose()?, backend.clone())?
+                    .mul(&scale)?
+                    .add_with_backend(&mask, backend.clone())?
+                    .softmax()?;
+                let values = attention
+                    .bmm_with_backend(&v, backend.clone())?
+                    .reshape(&[batch * t, dh])?;
+                x = add(&x, &mm(&values, &w[3])?)?;
+            }
+            let p = &p[HEAD_START + self.heads * PER_HEAD..];
+            let h = add(&x.layer_norm()?.mul(&p[0])?, &p[1])?;
+            let mlp = add(&mm(&h, &p[2])?, &p[3])?.gelu()?;
+            x = add(&x, &add(&mm(&mlp, &p[4])?, &p[5])?)?;
+        }
+        let head = &params[2 + self.layers * self.per_layer()..];
+        let normalized = add(&x.layer_norm()?.mul(&head[0])?, &head[1])?;
+        mm(&normalized, &head[2])?.reshape(&[batch, t, self.vocab_size])
+    }
+
+    /// Perda de minibatch retangular; uma única projeção linear para B×T tokens.
+    pub fn loss_batch_with_backend(
+        &self,
+        params: &[Tensor],
+        windows: &[&[usize]],
+        backend: Arc<dyn Backend>,
+    ) -> Result<Tensor> {
+        let len = windows.first().map_or(0, |w| w.len());
+        if len < 2 || windows.iter().any(|w| w.len() != len) {
+            return Err(TensorError::InvalidShape(
+                "batch needs equal-length windows >= 2",
+            ));
+        }
+        let inputs: Vec<usize> = windows
+            .iter()
+            .flat_map(|w| w[..len - 1].iter().copied())
+            .collect();
+        let targets: Vec<usize> = windows
+            .iter()
+            .flat_map(|w| w[1..].iter().copied())
+            .collect();
+        self.forward_batch_with_backend(params, &inputs, windows.len(), backend.clone())?
+            .reshape(&[targets.len(), self.vocab_size])?
+            .cross_entropy_with_backend(&targets, backend)
     }
 
     /// Perda média de previsão do próximo caractere sobre um lote de janelas.
@@ -197,6 +313,9 @@ impl KatsuLmConfig {
     pub fn loss(&self, params: &[Tensor], windows: &[&[usize]]) -> Result<Tensor> {
         if windows.is_empty() {
             return Err(TensorError::InvalidShape("loss needs at least one window"));
+        }
+        if windows.iter().all(|w| w.len() == windows[0].len()) {
+            return self.loss_batch_with_backend(params, windows, Arc::new(CpuBackend::default()));
         }
         let mut total: Option<Tensor> = None;
         for window in windows {
@@ -218,8 +337,9 @@ impl KatsuLmConfig {
     }
 
     /// Continua `prompt` por `count` tokens, amostrando com temperatura.
-    /// `temperature <= 0` escolhe sempre o mais provável. Usa as últimas
-    /// `block_size` posições como contexto. Não registra gradientes úteis.
+    /// `temperature <= 0` escolhe sempre o mais provável. O contexto cabe em
+    /// `block_size` posições; quando enche, recomeça dos últimos `block_size/2`
+    /// (arredondado para cima) tokens. Não registra gradientes úteis.
     pub fn generate(
         &self,
         params: &[Tensor],
@@ -228,18 +348,129 @@ impl KatsuLmConfig {
         temperature: f32,
         seed: u64,
     ) -> Result<Vec<usize>> {
-        if prompt.is_empty() {
-            return Err(TensorError::InvalidShape("prompt needs at least one token"));
+        self.generate_with_options(
+            params,
+            prompt,
+            count,
+            &GenerationOptions {
+                temperature,
+                seed,
+                repetition_penalty: 1.0,
+                stop_tokens: Vec::new(),
+            },
+        )
+    }
+
+    pub fn generate_with_options(
+        &self,
+        params: &[Tensor],
+        prompt: &[usize],
+        count: usize,
+        options: &GenerationOptions,
+    ) -> Result<Vec<usize>> {
+        if prompt.is_empty() || !options.temperature.is_finite() {
+            return Err(TensorError::InvalidShape(
+                "nonempty prompt and finite temperature required",
+            ));
         }
-        let mut rng = SplitMix64(seed);
+        let mut probe = Vec::new();
+        penalize_repetitions(&mut probe, &[], options.repetition_penalty)?;
+        let mut rng = SplitMix64(options.seed);
         let mut tokens = prompt.to_vec();
+        // KV cache: cada passo processa só os tokens que o cache ainda não viu. As posições
+        // são absolutas, então deslizar a janela invalida o cache; quando ela enche, a janela
+        // pula para os últimos `keep` tokens e o prefill é refeito uma vez, não a cada token.
+        let keep = self.block_size - self.block_size / 2;
+        let mut cache = infer::KvCache::new(self);
+        let mut start = 0;
         for _ in 0..count {
-            let start = tokens.len().saturating_sub(self.block_size);
-            let logits = self.forward(params, &tokens[start..])?;
-            let last = &logits.data()[logits.numel() - self.vocab_size..];
-            tokens.push(sample(last, temperature, rng.uniform()));
+            if tokens.len() - start > self.block_size {
+                start = tokens.len() - keep;
+                cache.clear();
+            }
+            let seen = start + cache.len();
+            let mut last = self.forward_cached(params, &mut cache, &tokens[seen..])?;
+            penalize_repetitions(&mut last, &tokens[start..], options.repetition_penalty)?;
+            tokens.push(sample(&last, options.temperature, rng.uniform()));
+            if !options.stop_tokens.is_empty()
+                && tokens[prompt.len()..].ends_with(&options.stop_tokens)
+            {
+                break;
+            }
         }
         Ok(tokens)
+    }
+
+    /// Acrescenta entradas e colunas de saída preservando os logits do vocabulário antigo.
+    pub fn extend_vocab(
+        &self,
+        params: &[Tensor],
+        vocab_size: usize,
+        seed: u64,
+    ) -> Result<(Self, Vec<Tensor>)> {
+        if vocab_size < self.vocab_size {
+            return Err(TensorError::InvalidShape("vocabulary must not shrink"));
+        }
+        let (_, mut next) = self.extend_context(params, self.block_size, seed)?;
+        let mut rng = SplitMix64(seed);
+        let mut embedding = rng
+            .tensor(&[vocab_size, self.embed_dim], 0.02)?
+            .data()
+            .to_vec();
+        embedding[..params[0].numel()].copy_from_slice(params[0].data());
+        next[0] = Tensor::new(embedding, &[vocab_size, self.embed_dim])?;
+        let last = params.len() - 1;
+        let mut head = rng
+            .tensor(&[self.embed_dim, vocab_size], 0.02)?
+            .data()
+            .to_vec();
+        for row in 0..self.embed_dim {
+            head[row * vocab_size..row * vocab_size + self.vocab_size].copy_from_slice(
+                &params[last].data()[row * self.vocab_size..(row + 1) * self.vocab_size],
+            );
+        }
+        next[last] = Tensor::new(head, &[self.embed_dim, vocab_size])?;
+        let mut config = *self;
+        config.vocab_size = vocab_size;
+        Ok((config, next))
+    }
+
+    /// Expande só a tabela posicional. Preserva exatamente os outros pesos e as posições antigas.
+    pub fn extend_context(
+        &self,
+        params: &[Tensor],
+        block_size: usize,
+        seed: u64,
+    ) -> Result<(Self, Vec<Tensor>)> {
+        self.validate()?;
+        if block_size < self.block_size {
+            return Err(TensorError::InvalidShape("new context must not shrink"));
+        }
+        let expected = self.init(seed)?;
+        if params.len() != expected.len()
+            || params
+                .iter()
+                .zip(&expected)
+                .any(|(p, e)| p.shape() != e.shape())
+        {
+            return Err(TensorError::InvalidShape(
+                "checkpoint does not match source config",
+            ));
+        }
+        let mut config = *self;
+        config.block_size = block_size;
+        let mut migrated = params
+            .iter()
+            .map(|p| Tensor::new(p.data().to_vec(), p.shape()))
+            .collect::<Result<Vec<_>>>()?;
+        let mut rng = SplitMix64(seed);
+        let mut positions = rng
+            .tensor(&[block_size, self.embed_dim], 0.02)?
+            .data()
+            .to_vec();
+        positions[..params[1].numel()].copy_from_slice(params[1].data());
+        migrated[1] = Tensor::new(positions, &[block_size, self.embed_dim])?;
+        Ok((config, migrated))
     }
 }
 

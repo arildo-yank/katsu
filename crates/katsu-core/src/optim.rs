@@ -100,6 +100,76 @@ pub struct Adam {
 }
 
 impl Adam {
+    /// Change LR without discarding Adam moments or its bias-correction step.
+    pub fn set_learning_rate(&mut self, learning_rate: f32) -> Result<()> {
+        validate_learning_rate(learning_rate)?;
+        self.learning_rate = learning_rate;
+        Ok(())
+    }
+
+    pub fn save_state(&self, w: &mut impl std::io::Write) -> std::io::Result<()> {
+        w.write_all(b"KATADAM1")?;
+        for value in [self.learning_rate, self.beta1, self.beta2, self.eps] {
+            w.write_all(&value.to_le_bytes())?;
+        }
+        w.write_all(&self.step.to_le_bytes())?;
+        w.write_all(&(self.moments.len() as u64).to_le_bytes())?;
+        for (m, v) in &self.moments {
+            w.write_all(&(m.len() as u64).to_le_bytes())?;
+            for values in [m, v] {
+                for value in values {
+                    w.write_all(&value.to_le_bytes())?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn load_state(r: &mut impl std::io::Read, params: &[Tensor]) -> std::io::Result<Self> {
+        use std::io::{Error, ErrorKind};
+        let bad = || Error::new(ErrorKind::InvalidData, "invalid Adam checkpoint");
+        let mut magic = [0; 8];
+        r.read_exact(&mut magic)?;
+        if &magic != b"KATADAM1" {
+            return Err(bad());
+        }
+        let mut values = [0.0; 4];
+        for value in &mut values {
+            let mut b = [0; 4];
+            r.read_exact(&mut b)?;
+            *value = f32::from_le_bytes(b);
+        }
+        let mut opt =
+            Self::with_betas(values[0], values[1], values[2], values[3]).map_err(|_| bad())?;
+        let mut b = [0; 4];
+        r.read_exact(&mut b)?;
+        opt.step = i32::from_le_bytes(b);
+        let mut b = [0; 8];
+        r.read_exact(&mut b)?;
+        let count = u64::from_le_bytes(b);
+        if opt.step < 0 || (count != params.len() as u64 && !(count == 0 && opt.step == 0)) {
+            return Err(bad());
+        }
+        for p in params.iter().take(count as usize) {
+            r.read_exact(&mut b)?;
+            if u64::from_le_bytes(b) != p.numel() as u64 {
+                return Err(bad());
+            }
+            let mut pair = (vec![0.0; p.numel()], vec![0.0; p.numel()]);
+            for (index, values) in [&mut pair.0, &mut pair.1].into_iter().enumerate() {
+                for value in values {
+                    let mut b = [0; 4];
+                    r.read_exact(&mut b)?;
+                    *value = f32::from_le_bytes(b);
+                    if !value.is_finite() || (index == 1 && *value < 0.0) {
+                        return Err(bad());
+                    }
+                }
+            }
+            opt.moments.push(pair);
+        }
+        Ok(opt)
+    }
     /// Padrões usuais: beta1 = 0.9, beta2 = 0.999, eps = 1e-8.
     pub fn new(learning_rate: f32) -> Result<Self> {
         Self::with_betas(learning_rate, 0.9, 0.999, 1e-8)
