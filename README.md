@@ -7,11 +7,12 @@
 [English](README.en.md) · [Começar](docs/getting-started.md) · [API](docs/api.md) · [Arquitetura](docs/architecture.md) · [Contribuir](CONTRIBUTING.md)
 
 Katsu combina tensores CPU `f32`, diferenciação automática reversa e Conv2D em um
-core sem dependências externas. A explicabilidade é uma direção do projeto:
+core com Rayon para paralelismo CPU. A explicabilidade é uma direção do projeto:
 ativações e gradientes já estão disponíveis; Grad-CAM ainda está no roadmap.
 
-> **Prévia técnica · 0.1.0 · MIT.** Há SGD, Adam, broadcasting e as peças de um
-> transformer; ainda não há mini-batches, GPU ou classe Tensor em Python. A API pode mudar. Não foram medidos ganhos sobre PyTorch.
+> **Prévia técnica · 0.1.0 · MIT.** Há SGD, Adam, mini-batches, modelo causal, BPE e SFT nativo em CPU. CUDA é experimental e ainda não foi validado em NVIDIA. A API pode mudar. Não foram medidos ganhos sobre PyTorch.
+
+[**Dossiê técnico — como o motor foi construído, evidências e limites**](docs/dossie-2026-10-24/README.md)
 
 ## Comece pelo código que funciona
 
@@ -49,15 +50,15 @@ O [arquivo executável](crates/katsu-core/examples/autograd.rs) também imprime 
 
 | Área | Implementado | Ainda não implementado |
 | --- | --- | --- |
-| Tensor | `add`/`mul` com broadcasting, `matmul`, `sum`, `transpose`, `reshape` | Views sem cópia, matmul em lote, outros dtypes |
-| Transformer | `softmax`, `log_softmax`, `layer_norm`, `gelu`, `relu`, `causal_mask`, `one_hot`, `cross_entropy` | Atenção multi-cabeça, dropout, embeddings treináveis dedicados |
+| Tensor | `add`/`mul` com broadcasting, `matmul`, `bmm`, `gather_rows`, `sum`, `transpose`, `reshape` | Views sem cópia, outros dtypes |
+| Transformer | `softmax`, `log_softmax`, `layer_norm`, `gelu`, `relu`, `causal_mask`, `one_hot`, `cross_entropy` | Dropout, inferência sem grafo |
 | Autograd | Grafo dinâmico, VJP, acumulação, `zero_grad`, `retain_grad` | `requires_grad`, detach, derivadas superiores |
 | Visão | Conv2D NCHW, stride, padding, dX e dW | Bias, groups, dilation, pooling |
 | Explicabilidade | Acesso às ativações e seus gradientes | Grad-CAM e heatmaps |
 | Python | Estrutura PyO3/Maturin; módulo de versão | `katsu.Tensor`, wheels publicados |
-| Linguagem | Katsu LM v1: 4 camadas × 4 cabeças, 22 obras brasileiras ([guia](docs/katsu-lm.md), [corpus](docs/corpus.md)) | Tokenizer BPE, lote em matmul, threads |
-| Treinamento | SGD, Adam, loop `fit`, métricas JSON por época ([guia](docs/training.md)) | Mini-batches, agendamento de lr, gradient clipping |
-| Execução | CPU, single-thread, Rust seguro | GPU, paralelismo, backend HTTP |
+| Linguagem | Katsu LM v1 e pipeline Rust BPE/batches ([guia](docs/katsu-lm.md), [corpus](docs/corpus.md)) | Treino grande e backend CUDA |
+| Treinamento | SGD, Adam, mini-batches, loop `fit`, métricas JSON por época ([guia](docs/training.md)) | Agendamento de lr, gradient clipping |
+| Execução | CPU, Rayon, NEON/AVX2, Tensor Send/Sync | GPU, backend HTTP |
 
 ## Do pixel ao gradiente
 
@@ -74,9 +75,8 @@ entrada e pesos como pais; `loss.backward()` acumula ambos os gradientes.
 
 ![Arquitetura do Katsu: core disponível, Python inicial e módulos planejados](docs/assets/architecture.svg)
 
-O core usa `Rc` para compartilhar nós e `RefCell` apenas para os gradientes.
-Dados e arestas são imutáveis. `clone()` compartilha o mesmo nó. O motor ainda
-não é `Send`/`Sync`. Leia a [arquitetura e os limites](docs/architecture.md).
+O core usa `Arc` para compartilhar nós e `RwLock` para os gradientes.
+Dados e arestas são imutáveis. `clone()` compartilha o mesmo nó; Tensor é `Send`/`Sync`. Leia a [arquitetura e os limites](docs/architecture.md).
 
 ## Documentação
 
@@ -100,15 +100,22 @@ banco de dados, autenticação, deploy com proxy/HTTPS, rate limiting, cache/CDN
 backup e endpoint de métricas. Se um backend HTTP for criado (roadmap), essas
 camadas passam a valer. O que se aplica: testes automatizados, CI, hook local
 (`.githooks`), dependências fixadas em `Cargo.lock`, erros tipados e um motor
-single-thread cujo limite de escala está documentado em [arquitetura](docs/architecture.md).
+CPU cujo limite de escala está documentado em [arquitetura](docs/architecture.md).
 
 ## Validação e licença
 
-Há **49 testes de integração** do core: 6 de Tensor, 8 de Autograd, 7 de Conv2D, 6 de Treinamento, 11 de operações de transformer e 11 do Katsu LM.
-A verificação local via `rustc` passou, incluindo diferenças finitas. O workflow
+Há **59 testes de integração** do core: 49 anteriores e 10 de escala.
+A validação usa Cargo, incluindo diferenças finitas e concorrência. O workflow
 [GitHub Actions](.github/workflows/ci.yml) está configurado; sua execução remota
 não foi verificada. O workspace Python completo ainda não foi validado.
 
 Licença [MIT](LICENSE). Contribuições são bem-vindas; comece pelo
 [guia de contribuição](CONTRIBUTING.md). Os SVGs são arquivos vetoriais locais,
 editáveis e distribuídos sob a mesma licença do projeto.
+
+## Escala nativa Rust
+
+Veja [BPE, batches, kernels CPU e CUDA experimental](docs/scaling.md). O backend
+CUDA híbrido está implementado, com validação NVIDIA pendente. Há um
+[ambiente de validação GPU](deploy/cuda/README.md) e [exportador GGUF nativo](docs/gguf.md).
+Nenhum peso de terceiros é usado.

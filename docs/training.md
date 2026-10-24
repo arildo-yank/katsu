@@ -70,4 +70,5 @@ Sem argumento, as linhas vão para stdout e o resumo final vai para stderr.
 
 `fit` aceita qualquer `Optimizer`: `&mut Sgd::new(lr)?` ou `&mut Adam::new(lr)?`.
 Taxa de aprendizado fixa, sem mini-batches, agendamento de lr ou gradient clipping.
-O treino roda no processo do chamador, em uma thread; não há servidor HTTP.
+O treino roda no processo do chamador; kernels de matmul podem usar Rayon.
+Não há servidor HTTP no core. Batches/BPE: [guia de escala](scaling.md).

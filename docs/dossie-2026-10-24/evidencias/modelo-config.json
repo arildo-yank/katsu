@@ -1,0 +1,29 @@
+{
+  "adam_state_resumed": false,
+  "adapt_steps": 0,
+  "base_checkpoint": "/Volumes/500G DEV/KATSU/runs/mac-context-256-adapted",
+  "batch_size": 1,
+  "block_size": 256,
+  "embed_dim": 32,
+  "format": "Katsu-native-rust-sft-v1",
+  "heads": 4,
+  "layers": 1,
+  "learning_rate": 0.0005000000237487257,
+  "loss_mask": "assistant-only",
+  "markers": "KATSUBP2 reserved instruction IDs",
+  "parameters": 2069088,
+  "phase": "sft",
+  "sampling_seed": 2026,
+  "seed": 1,
+  "source_checkpoint": "/Volumes/500G DEV/KATSU/runs/mac-sft-256-lr1e4/adapted.ckpt",
+  "source_sha256": "59093d7c5bae9e05132d747673968866da698a542d77b1777461d38c2a37c8c3",
+  "special_token_ids": {
+    "<|assistant|>": 32002,
+    "<|end|>": 32003,
+    "<|system|>": 32000,
+    "<|user|>": 32001
+  },
+  "steps": 3000,
+  "train_sequence_length": 256,
+  "vocab_size": 32004
+}

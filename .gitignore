@@ -12,3 +12,7 @@ __pycache__/
 *.bpe
 
 /data/corpus-bilingual-*/
+
+# Estado local da máquina
+.DS_Store
+/active-run.json

@@ -128,3 +128,16 @@ cargo doc -p katsu-core --no-deps --open
 ```
 
 O [guia de testes](testing.md) também mostra como gerar rustdoc sem resolver o workspace.
+
+## Extensões de escala
+
+- `Tensor::matmul_with_backend(rhs, Arc<dyn Backend>)`: seleciona kernel e registra o backend no grafo.
+- `Tensor::bmm(rhs)` / `bmm_with_backend`: produto rank 3, batches iguais, sem broadcast.
+- `Tensor::gather_rows(indices)`: lookup rank 2 e scatter-add de gradientes em índices repetidos.
+- `transpose` agora permuta as últimas duas dimensões para rank >= 2.
+- `grad()` devolve `RwLockReadGuard<Option<Vec<f32>>>`; Tensor é Send/Sync.
+- `Backend`, `CpuBackend`, `GpuBackend`: GPU retorna `BackendUnavailable`; `LockPoisoned` identifica falha na publicação.
+- `BpeTokenizer::train/encode/decode/save/load`: BPE de bytes; decode retorna erro em UTF-8 incompleto.
+- `KatsuLmConfig::native_139m/native_349m`, `forward_batch`, `loss_batch_with_backend`.
+
+Veja [Escala](scaling.md) para formatos, memória e limitações.

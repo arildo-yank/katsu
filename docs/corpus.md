@@ -2,7 +2,9 @@
 
 [Índice](README.md)
 
-O Katsu LM é treinado só com **literatura brasileira em domínio público**. Os textos
+O corpus inicial do Katsu LM usa **literatura brasileira em domínio público**.
+A versão PT/EN posterior está documentada em [Corpus bilíngue](bilingual-corpus.md);
+os arquivos originais continuam preservados. Os textos
 vêm do Project Gutenberg e não são versionados no git (`/corpus/` está no `.gitignore`).
 Para reproduzir o corpus exatamente:
 

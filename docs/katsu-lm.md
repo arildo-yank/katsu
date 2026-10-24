@@ -76,7 +76,6 @@ para várias cabeças, validação de `heads`, layout, causalidade e diferenças
 
 ## Limites
 
-Tokens por caractere; lote processado janela a janela (sem
-matmul em lote); CPU em uma thread. O matmul usa laços vetorizáveis (SIMD automático),
-sem blocagem de cache. Modelos de milhões de parâmetros exigem as próximas etapas
-de desempenho do [roadmap](roadmap.md).
+v0/v1 continuam disponíveis com CharTokenizer. O novo pipeline tem BPE, batches
+reais, gather de embeddings e matmul CPU paralelo com NEON/AVX2. GPU ainda não
+executa. Veja [Escala nativa](scaling.md) para comandos, perfis e limitações.

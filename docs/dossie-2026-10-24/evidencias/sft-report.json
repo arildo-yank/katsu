@@ -1,0 +1,15 @@
+{
+  "adapt_steps": 0,
+  "base_eval_loss": 10.066518878936767,
+  "elapsed_sft_seconds": 226.782368834,
+  "final_eval_loss": 0.10163130201399326,
+  "final_train_loss": 0.14958607499789917,
+  "finite_checks_passed": true,
+  "heldout_examples": 10,
+  "initial_eval_loss": 10.066518878936767,
+  "initial_train_loss": 10.098250685938147,
+  "learning_rate": 0.0005000000237487257,
+  "max_train_tokens": 94,
+  "steps": 3000,
+  "train_examples": 302
+}

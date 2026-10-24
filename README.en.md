@@ -6,7 +6,7 @@
 
 [Português](README.md) · [API reference (PT)](docs/api.md) · [Contributing](CONTRIBUTING.md)
 
-Katsu is an early technical preview: a dependency-free Rust CPU core with f32
+Katsu is an early technical preview: a Rust CPU core using Rayon with f32
 tensors, reverse-mode autograd and NCHW Conv2D. Explainability is a project goal;
 activation tensors and their gradients are available, but Grad-CAM is not yet implemented.
 
@@ -21,7 +21,7 @@ cargo run -p katsu-core --release --example conv2d
 ```
 
 Cargo may need network access to resolve the workspace's PyO3 dependency, even
-when selecting the core package. See the [offline rustc instructions](docs/testing.md).
+when selecting the core package. See the [offline Cargo instructions](docs/testing.md).
 
 ```rust
 use katsu_core::{Tensor, TensorError};
@@ -56,7 +56,7 @@ This computes gradients, not a complete training loop.
 
 ## Scope and limitations
 
-Single-threaded Rc/RefCell engine; no GPU. Training uses SGD or Adam with a
+Arc/RwLock Tensor graph with Rayon and NEON/AVX2 CPU kernels; no GPU. Training uses SGD or Adam with a
 fixed rate; no mini-batches. No strided views or higher-order derivatives. Conv2D
 has no bias, groups or dilation. Python is a packaging scaffold exposing a
 version value, not a Tensor API. Do not expect `pip install katsu` to install this project.
@@ -69,3 +69,5 @@ The detailed documentation is currently in Portuguese:
 [start here](docs/README.md). Bug reports and contributions in English or Portuguese
 are welcome. See [MIT license](LICENSE), [contribution guide](CONTRIBUTING.md),
 [roadmap](docs/roadmap.md) and [changelog](CHANGELOG.md).
+
+See [native scaling](docs/scaling.md) for Rust BPE, batched training and the experimental hybrid CUDA backend. NVIDIA runtime validation is pending. See [GPU validation](deploy/cuda/README.md) and [native GGUF export](docs/gguf.md).

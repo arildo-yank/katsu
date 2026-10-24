@@ -40,8 +40,8 @@ Crescimento gradual, cada etapa com algo demonstrável:
 1. **Katsu fala português** *(em andamento)*: Katsu LM, de caracteres, treinado no Mac com textos
    brasileiros em domínio público, loss ao vivo no monitor arandu. Feito: modelo,
    geração, checkpoint, v0 (~116 mil parâmetros, 1 livro) e v1 (~481 mil, 4 cabeças,
-   22 obras). Falta: tokenizer BPE, threads e chegar a milhões de parâmetros.
-2. **Desempenho**: matmul blocado/SIMD, threads (`Arc` + `rayon`), f16 e quantização int8.
+   22 obras no treino v1). BPE e batches/threads implementados; treino grande ainda pendente.
+2. **Desempenho**: SIMD e threads (`Arc` + `rayon`) implementados; blocagem, f16 e int8 pendentes.
 3. **Inferência de pesos abertos**: carregar safetensors e gerar texto no chat do Arandu.
 4. **Escala em GPU alugada**: backend GPU e modelos de centenas de milhões a bilhões de parâmetros.
 5. **Atribuição por token** no modelo próprio: explicabilidade real das respostas.
@@ -53,7 +53,7 @@ milhares de GPUs para treinar. Escalas acima de bilhões dependem de investiment
 
 - [ ] Expor Tensor e operações com PyO3.
 - [ ] Mapear TensorError para exceções Python.
-- [ ] Resolver afinidade de thread do core Rc/RefCell antes de liberar o GIL.
+- [x] Tensor Send/Sync via Arc/RwLock; liberação do GIL na ponte ainda pendente.
 - [ ] Construir wheel e testar instalação em um ambiente limpo.
 
 Critério: um exemplo Python usa a API real e reproduz o resultado Rust. Verificar
@@ -78,3 +78,5 @@ Não anunciar causalidade ou explicação exata das decisões.
 
 Critério: benchmarks reproduzíveis e uma demonstração de inferência com limites
 de recursos definidos. Nenhum ganho competitivo é presumido.
+
+Entrega incremental e limites atuais: [Escala nativa Rust](scaling.md).

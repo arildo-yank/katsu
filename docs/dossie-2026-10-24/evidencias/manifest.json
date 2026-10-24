@@ -1,0 +1,29 @@
+{
+  "scope": "Independent engine and UI; historical source files not a test rerun",
+  "files": [
+    {
+      "path": "/Volumes/500G DEV/KATSU/crates/katsu-core/src/tensor.rs",
+      "sha256": "f12b0d86611af5e1273b5d9084f57cb02974a640d9271dfea1bf7500d258f9b9"
+    },
+    {
+      "path": "/Volumes/500G DEV/KATSU/crates/katsu-core/src/lm.rs",
+      "sha256": "8dc9b63a1c6728c03f5a71d3bc72718b573f8eeec8166317214344d293d8dba8"
+    },
+    {
+      "path": "/Volumes/500G DEV/KATSU/crates/katsu-core/src/optim.rs",
+      "sha256": "2b3bfbeb76187ea1c8455c773146d85c878be1ef030c1056117bfbcaace4e3ab"
+    },
+    {
+      "path": "/Volumes/500G DEV/KATSU/crates/katsu-core/src/bpe.rs",
+      "sha256": "16dd7507fddf9995e73b3f2842c6a896c4e483d2df2e828458a8b239e9a416d5"
+    },
+    {
+      "path": "/Volumes/500G DEV/KATSU/crates/katsu-server/src/main.rs",
+      "sha256": "1a54c29a25efbecf5a8f0f6da516e27d45ca084a65bcf4da91580b3639852d3d"
+    },
+    {
+      "path": "/Volumes/500G DEV/ARANDU/arandu-web/api.py",
+      "sha256": "be334d7c07696626b8e810e71ce92979f9f5619e0826e22078dca90ed0d4198a"
+    }
+  ]
+}

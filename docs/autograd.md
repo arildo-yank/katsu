@@ -15,7 +15,7 @@ calculamos as derivadas de `sum(v * Y)` em relação aos ancestrais de Y.
 O seed é constante nesta diferenciação.
 
 1. DFS iterativa constrói a ordem topológica, pais antes dos filhos.
-2. Cada nó aparece uma vez, identificado pela identidade Rc, não pelos seus valores.
+2. Cada nó aparece uma vez, identificado pela identidade Arc, não pelos seus valores.
 3. O motor cria adjuntos temporários zerados para os nós alcançáveis.
 4. Percorre a ordem reversa e acumula cada contribuição nos pais.
 5. Valida os empréstimos dos gradientes e só então publica os resultados.
@@ -68,10 +68,11 @@ fn main() -> Result<(), TensorError> {
 ```
 
 Se houver conflito, o motor retorna `GradientBorrowed` antes de modificar os
-campos `grad`. Isso não representa execução concorrente: o motor é single-thread.
+campos `grad`. VJPs podem executar concorrentemente; a publicação é serializada
+para acumular gradientes sem atualizações parciais.
 
 ## Escopo atual
 
 Todos os operandos são rastreados, incluindo constantes. Os gradientes são
 buffers numéricos sem grafo próprio; não há derivadas de ordem superior.
-`requires_grad`, `detach`, atualização de parâmetros e otimizadores estão pendentes.
+`requires_grad` e `detach` estão pendentes; SGD e Adam já existem.

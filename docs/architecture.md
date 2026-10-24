@@ -14,13 +14,13 @@
 | `pyproject.toml` | Build Maturin | Configurado; integração não validada |
 | Futuro backend HTTP | Serviço de inferência | Não implementado |
 
-O core não tem dependências externas. O workspace resolve também PyO3; isso
+O core usa Rayon para kernels CPU paralelos. O workspace resolve também PyO3; isso
 explica por que Cargo pode precisar de rede mesmo quando testa só o core.
 
 ## Ownership e imutabilidade
 
-`Tensor` encapsula `Rc<TensorNode>`. Cada nó contém `Vec<f32>`, shape,
-`RefCell<Option<Vec<f32>>>` para gradientes, `Vec<Tensor>` de pais e `Op`.
+`Tensor` encapsula `Arc<TensorNode>`. Cada nó contém `Vec<f32>`, shape,
+`RwLock<Option<Vec<f32>>>` para gradientes, `Vec<Tensor>` de pais e `Op`.
 Os dados, shapes e pais são privados e imutáveis depois da construção.
 
 - `clone()` incrementa a referência ao mesmo nó; não duplica dados.
@@ -36,21 +36,22 @@ definir como atualizar parâmetros entre grafos sem invalidar grafos anteriores.
 
 ## Execução e memória
 
-Dados em `f32`, CPU e ordem row-major. Matmul e convolução são kernels diretos,
-sequenciais, sem BLAS, GPU ou SIMD explícito. Broadcasting usa um mapa de índices
+Dados em `f32`, CPU e ordem row-major. Matmul usa Rayon e NEON/AVX2;
+convolução permanece sequencial. Não há BLAS ou GPU. Broadcasting usa um mapa de índices
 por operação; não há views ou strides de armazenamento (transpose e reshape copiam).
 
-O crate declara `#![forbid(unsafe_code)]`. Buffers numéricos usam reserva falível;
-Rc, vetores de pais e estruturas auxiliares do grafo usam alocação padrão. Não há
+O crate declara `#![deny(unsafe_code)]`, com exceção isolada para intrinsics em `simd.rs`. Buffers numéricos usam reserva falível;
+Arc, vetores de pais e estruturas auxiliares do grafo usam alocação padrão. Não há
 garantia de recuperar qualquer falta de memória; alocações do chamador também
 estão fora do tratamento do core.
 
-O grafo usa Rc/RefCell e não é Send/Sync. A travessia backward e a destruição
+O Tensor usa Arc/RwLock e é Send/Sync; publicação de gradientes é serializada. A travessia backward e a destruição
 do grafo são iterativas: cadeias com centenas de milhares de nós não estouram a pilha.
 
 ## Integração futura
 
-Um wrapper PyO3 terá de escolher afinidade de thread (`unsendable`) ou outro modelo
-de ownership. A decisão sobre liberar o GIL não está implementada. Um serviço Axum
+Um wrapper PyO3 pode compartilhar Tensor entre threads; Conv2D ainda mantém cache RefCell. A decisão sobre liberar o GIL não está implementada. Um serviço Axum
 precisará de uma API de inferência e uma estratégia de isolamento/concorrência.
 Essas camadas não devem trazer HTTP ou Python para a matemática do core.
+
+Detalhes dos kernels, batches, BPE e limites da ponte GPU em [Escala](scaling.md).
