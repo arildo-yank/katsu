@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Espelha um run de treino de um pod (via SSH) para KATSU/runs/<nome>, a cada 30 s, para o painel
-# Dev mostrar a curva ao vivo. Aponta o active-run.json para o espelho uma vez, no início; depois
-# a escolha do run no painel é sua.
+# Espelha um run de treino de um pod (via SSH) para KATSU/runs/<nome>, a cada MIRROR_EVERY segundos
+# (padrão 30), para o painel Dev mostrar a curva ao vivo e, se o collect_telemetry.py estiver
+# rodando no pod, o hardware. Aponta o active-run.json para o espelho uma vez, no início; depois a
+# escolha do run no painel é sua.
 #
 #   scripts/mirror_pod_run.sh root@IP PORTA /root/katsu-gpu-v2/runs/gpu-sft-134m-... gpu-sft-4090
 #
@@ -15,7 +16,7 @@ mkdir -p "$local"
 ssh_() { ssh -i "${SSH_KEY:-$HOME/.ssh/arandu_gpu}" -p "$port" -o BatchMode=yes -o ConnectTimeout=10 "$host" "$@"; }
 pointed=0
 while true; do
-  for f in metrics.jsonl config.json launch.json sft-report.json; do
+  for f in metrics.jsonl config.json launch.json sft-report.json system_telemetry.json; do
     if ssh_ "cat '$remote/$f' 2>/dev/null" > "$local/$f.tmp" && [[ -s "$local/$f.tmp" ]]; then
       mv "$local/$f.tmp" "$local/$f"
     else
@@ -29,5 +30,5 @@ while true; do
     echo "painel apontado para $name"
   fi
   [[ -s "$local/sft-report.json" ]] && { echo "run concluído: $local/sft-report.json"; exit 0; }
-  sleep 30
+  sleep "${MIRROR_EVERY:-30}"
 done
