@@ -5,11 +5,13 @@ cd "$(dirname "$0")"
 MODE=${1:---help}
 if [[ "$MODE" == --help ]]; then
   cat <<'HELP'
-Uso: ./hostinger_setup.sh --preflight | --check | --benchmark | --run
+Uso: ./hostinger_setup.sh --preflight | --check | --benchmark | --compare | --run
 Pré-requisitos do host: Linux, driver NVIDIA, Docker e NVIDIA Container Toolkit.
 --preflight: verifica host e arquivos, sem instalar nem treinar.
 --check: valida CPU×CUDA e executa 10 passos SFT do modelo 134M.
 --benchmark: executa exatamente 100 passos no corpus; sem avaliação SFT.
+--compare: testes CUDA e 100 passos no modo híbrido e no residente (pesos e Adam
+  na VRAM, KATSU_RESIDENT=1), com tokens/s e GB por passo de cada um.
 --run: valida CUDA, treina no corpus e depois faz SFT (piloto experimental).
 Variáveis:
  TOKENIZER=runs/bpe-arandu-v1/tokenizer.bpe (caminho relativo ao repo)
@@ -21,6 +23,8 @@ Variáveis:
  KATSU_WARMUP_RATIO=0.05 KATSU_MIN_LR_RATIO=0.1 KATSU_CORPUS_LR=0.0001
  KATSU_RESUME= (latest.ckpt da mesma configuração; OUTPUT deve ser novo)
  OUTPUT=runs/hostinger-sft-139m-<UTC>
+ KATSU_RESIDENT=1 (pesos, gradientes e Adam na VRAM; KATSU_RESIDENT_REST=device
+   mantém somas, atenção e entropia na GPU em vez do host)
 Sem BASE, inicializa pesos aleatórios. --check é smoke; --run é um piloto de
 pré-treinamento e SFT, não um modelo final. Quantidades devem caber no orçamento.
 Perfil nominal 139M: 12 camadas, 768 dimensões, 12 heads, contexto 256.
@@ -28,7 +32,7 @@ A contagem real é registrada pelo treinador (embeddings não compartilhados).
 HELP
   exit 0
 fi
-[[ "$MODE" == --preflight || "$MODE" == --check || "$MODE" == --benchmark || "$MODE" == --run ]] || { echo 'Modo inválido' >&2; exit 2; }
+[[ "$MODE" == --preflight || "$MODE" == --check || "$MODE" == --benchmark || "$MODE" == --compare || "$MODE" == --run ]] || { echo 'Modo inválido' >&2; exit 2; }
 [[ $(uname -s) == Linux ]] || { echo 'Requer host Linux/NVIDIA; não inicia treino no Mac.' >&2; exit 1; }
 python3 scripts/verify_gpu_data.py
 command -v docker >/dev/null
@@ -43,7 +47,11 @@ CORPUS=${CORPUS:-data/corpus-bilingual-arandu-v1/train.txt}
 CHECKPOINT_EVERY=${CHECKPOINT_EVERY:-25}
 if [[ "$MODE" == --check ]]; then STEPS=10; PRETRAIN_STEPS=0; fi
 KATSU_BENCHMARK_ONLY=0
-if [[ "$MODE" == --benchmark ]]; then STEPS=0; PRETRAIN_STEPS=100; KATSU_BENCHMARK_ONLY=1; fi
+if [[ "$MODE" == --benchmark || "$MODE" == --compare ]]; then STEPS=0; PRETRAIN_STEPS=100; KATSU_BENCHMARK_ONLY=1; fi
+KATSU_RESIDENT=${KATSU_RESIDENT:-}
+KATSU_RESIDENT_REST=${KATSU_RESIDENT_REST:-}
+COMPARE=0; [[ "$MODE" == --compare ]] && COMPARE=1
+export KATSU_RESIDENT KATSU_RESIDENT_REST COMPARE
 KATSU_WARMUP_RATIO=${KATSU_WARMUP_RATIO:-0.05}
 KATSU_MIN_LR_RATIO=${KATSU_MIN_LR_RATIO:-0.1}
 KATSU_CORPUS_LR=${KATSU_CORPUS_LR:-0.0001}
@@ -98,6 +106,7 @@ docker run --rm --gpus all --user "$(id -u):$(id -g)" \
   -e CARGO_HOME=/tmp/cargo -e CARGO_TARGET_DIR=/workspace/target-hostinger \
   -e KATSU_WARMUP_RATIO -e KATSU_MIN_LR_RATIO -e KATSU_CORPUS_LR -e KATSU_EVAL_SAMPLES -e KATSU_RESUME \
   -e TOKENIZER -e BASE -e STEPS -e LR -e MEMORY_BUDGET_MIB -e OUTPUT -e TRAIN_DATA -e EVAL_DATA -e PRETRAIN_STEPS -e CORPUS -e CHECKPOINT_EVERY -e KATSU_BENCHMARK_ONLY \
+  -e KATSU_RESIDENT -e KATSU_RESIDENT_REST -e COMPARE \
   -v "$PWD:/workspace" katsu-cuda bash -c '
 set -euo pipefail
 cargo test --release --locked -p katsu-core --features cuda --test cuda -- --include-ignored
@@ -116,7 +125,25 @@ if not os.environ["BASE"]:
 PY
 if [[ -z "$BASE" ]]; then BASE="${OUTPUT}-init"; export KATSU_INIT_RANDOM=1; fi
 export KATSU_BACKEND=cuda KATSU_MEMORY_BUDGET_MIB="$MEMORY_BUDGET_MIB" KATSU_CHECKPOINT_EVERY="$CHECKPOINT_EVERY"
-cargo run --release --locked -p katsu-server --features cuda --bin train_sft -- \
- "$BASE" "$TRAIN_DATA" "$EVAL_DATA" "$CORPUS" "$OUTPUT" "$STEPS" "$PRETRAIN_STEPS" "$LR"
-(cd "$OUTPUT" && sha256sum model.ckpt tokenizer.bpe config.json metrics.jsonl sft-report.json > SHA256SUMS)
+train() {
+  cargo run --release --locked -p katsu-server --features cuda --bin train_sft -- \
+   "$BASE" "$TRAIN_DATA" "$EVAL_DATA" "$CORPUS" "$1" "$STEPS" "$PRETRAIN_STEPS" "$LR"
+  (cd "$1" && sha256sum model.ckpt tokenizer.bpe config.json metrics.jsonl sft-report.json > SHA256SUMS)
+}
+if [[ "$COMPARE" == 1 ]]; then
+  KATSU_RESIDENT= train "$OUTPUT-hybrid"
+  KATSU_RESIDENT=1 train "$OUTPUT-resident"
+  python3 - "$OUTPUT-hybrid" "$OUTPUT-resident" <<"PY"
+import json,statistics,sys
+for run in sys.argv[1:]:
+    rows=[json.loads(l) for l in open(run+"/metrics.jsonl")][5:]  # sem os passos de aquecimento
+    secs=statistics.median(r["step_seconds"] for r in rows)
+    moved=[r["transfer_bytes"] for r in rows if r.get("transfer_bytes") is not None]
+    gb=f"{statistics.median(moved)/1e9:.2f} GB/passo (store)" if moved else "sem store"
+    tokens=rows[0]["input_tokens"]
+    print(f"{run}: mediana {secs:.3f} s/passo, {tokens/secs:.0f} tokens/s, {gb}")
+PY
+else
+  train "$OUTPUT"
+fi
 '
