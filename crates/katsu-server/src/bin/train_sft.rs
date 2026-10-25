@@ -801,6 +801,12 @@ mod gpu {
             Adam::new(r.learning_rate)?
         };
         t.load_adam(&sft_adam)?;
+        // KATSU_DUMP_BATCHES=arquivo: grava os lotes exatos de cada passo (para treinar os mesmos
+        // tokens em outro framework e comparar velocidade com os mesmos dados).
+        let mut dump = match std::env::var("KATSU_DUMP_BATCHES") {
+            Ok(path) if !path.is_empty() => Some(BufWriter::new(File::create(path)?)),
+            _ => None,
+        };
         let started = std::time::Instant::now();
         let sft_start = if r.resume_phase == "sft" {
             r.resume_step
@@ -819,6 +825,13 @@ mod gpu {
                 .map(|e| (e.ids.as_slice(), e.answer_start))
                 .collect();
             let batch = SftBatch::new(&pairs)?;
+            if let Some(out) = dump.as_mut() {
+                writeln!(
+                    out,
+                    "{}",
+                    json!({"step":s,"batch":batch.batch,"width":batch.width,"input_tokens":batch.input_tokens,"tokens":batch.tokens,"targets":batch.targets,"weights":batch.weights})
+                )?;
+            }
             let loss = t.loss_and_grad(&batch)?;
             let norm = step(&mut t, loss)?;
             if s % r.checkpoint_every == 0 {
