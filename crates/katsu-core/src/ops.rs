@@ -1,5 +1,7 @@
 //! Operações de transformer: broadcasting, forma, ativações e normalização.
 //! Cada forward registra seu Op; as derivadas locais ficam em `unary_backward`.
+use rayon::prelude::*;
+
 use crate::{
     tensor::{element_count, zeros_buffer},
     Op, Tensor, TensorError,
@@ -11,6 +13,17 @@ type Result<T> = std::result::Result<T, TensorError>;
 pub const LAYER_NORM_EPS: f32 = 1e-5;
 pub(crate) const GELU_C: f32 = 0.797_884_6; // sqrt(2/pi)
 pub(crate) const GELU_K: f32 = 0.044_715;
+
+/// Cópia transposta de uma matriz `[rows, cols]` contígua.
+pub(crate) fn transposed(data: &[f32], rows: usize, cols: usize) -> Result<Vec<f32>> {
+    let mut out = zeros_buffer(rows * cols)?;
+    for i in 0..rows {
+        for j in 0..cols {
+            out[j * rows + i] = data[i * cols + j];
+        }
+    }
+    Ok(out)
+}
 
 /// Shape resultante pelas regras do NumPy: alinha à direita; dimensão 1 expande.
 pub(crate) fn broadcast_shape(a: &[usize], b: &[usize]) -> Result<Vec<usize>> {
@@ -136,6 +149,165 @@ impl Tensor {
         Ok(Self::node(data, shape, Op::Transpose, vec![self.clone()]))
     }
 
+    /// `x·W + b` com x `[m, k]`, W `[k, n]` e b `[n]`, num nó só: mesmas contas de
+    /// `x.matmul(W).add(b)`, sem guardar o produto antes do bias (que o backward não usa).
+    pub fn linear_with_backend(
+        &self,
+        weight: &Self,
+        bias: &Self,
+        backend: std::sync::Arc<dyn crate::Backend>,
+    ) -> Result<Self> {
+        if self.rank() != 2 || weight.rank() != 2 || weight.shape()[0] != self.shape()[1] {
+            return Err(TensorError::InvalidShape(
+                "linear needs x [m,k] and W [k,n]",
+            ));
+        }
+        let (m, k, n) = (self.shape()[0], self.shape()[1], weight.shape()[1]);
+        if bias.shape() != [n] {
+            return Err(TensorError::InvalidShape("linear bias must be [n]"));
+        }
+        let mut data = backend.matmul(self.data(), weight.data(), m, k, n)?;
+        if data.len() != m * n {
+            return Err(TensorError::InvalidShape(
+                "backend returned wrong output size",
+            ));
+        }
+        if n != 0 {
+            for row in data.chunks_mut(n) {
+                for (value, &b) in row.iter_mut().zip(bias.data()) {
+                    *value += b;
+                }
+            }
+        }
+        Ok(Self::node(
+            data,
+            vec![m, n],
+            Op::Linear,
+            vec![self.clone(), weight.clone(), bias.clone()],
+        )
+        .with_backend(backend))
+    }
+
+    /// `layer_norm(x)·γ + β` por linha, num nó só: mesmas contas de
+    /// `x.layer_norm().mul(γ).add(β)`, guardando só a saída. O backward refaz x̂ a partir de x.
+    pub fn layer_norm_affine(&self, gamma: &Self, beta: &Self) -> Result<Self> {
+        let (count, width) = rows(self)?;
+        if gamma.shape() != [width] || beta.shape() != [width] {
+            return Err(TensorError::InvalidShape(
+                "layer norm γ and β must be [width]",
+            ));
+        }
+        let mut data = zeros_buffer(self.numel())?;
+        for r in 0..count {
+            let x = &self.data()[r * width..(r + 1) * width];
+            let (mean, inv_std) = row_stats(x);
+            for (((out, &value), &g), &b) in data[r * width..(r + 1) * width]
+                .iter_mut()
+                .zip(x)
+                .zip(gamma.data())
+                .zip(beta.data())
+            {
+                *out = (value - mean) * inv_std * g + b;
+            }
+        }
+        Ok(Self::node(
+            data,
+            self.shape().to_vec(),
+            Op::LayerNormAffine,
+            vec![self.clone(), gamma.clone(), beta.clone()],
+        ))
+    }
+
+    /// Atenção causal escalada sobre `[batch, t, dh]` (self = q): `softmax(q·kᵀ/√dh + máscara)`.
+    /// Faz as mesmas contas, na mesma ordem, que
+    /// `q.bmm(&k.transpose()).mul(&escala).add(&causal_mask(t)).softmax()`, mas o grafo guarda
+    /// só as probabilidades `[batch, t, t]`: kᵀ, scores, escala e máscara não viram nós e
+    /// são refeitos no backward. Corta três matrizes `t×t` por cabeça das ativações.
+    pub fn causal_attention_with_backend(
+        &self,
+        k: &Self,
+        backend: std::sync::Arc<dyn crate::Backend>,
+    ) -> Result<Self> {
+        if self.rank() != 3 || k.shape() != self.shape() {
+            return Err(TensorError::InvalidShape(
+                "causal attention needs q and k with the same [batch, t, dh] shape",
+            ));
+        }
+        let (batch, t, dh) = (self.shape()[0], self.shape()[1], self.shape()[2]);
+        let scale = 1.0 / (dh as f32).sqrt();
+        let mut data = zeros_buffer(element_count(&[batch, t, t])?)?;
+        if t != 0 && dh != 0 {
+            for b in 0..batch {
+                let kt = transposed(&k.data()[b * t * dh..(b + 1) * t * dh], t, dh)?;
+                let scores =
+                    backend.matmul(&self.data()[b * t * dh..(b + 1) * t * dh], &kt, t, dh, t)?;
+                if scores.len() != t * t {
+                    return Err(TensorError::InvalidShape(
+                        "backend returned wrong output size",
+                    ));
+                }
+                let out = &mut data[b * t * t..(b + 1) * t * t];
+                // Linhas independentes: em paralelo, com as mesmas contas por linha.
+                out.par_chunks_mut(t)
+                    .zip(scores.par_chunks(t))
+                    .enumerate()
+                    .for_each(|(i, (row, scores))| {
+                        // Mesma ordem de antes: × escala, + máscara (0 ou -inf), log-softmax, exp.
+                        for (j, (value, &score)) in row.iter_mut().zip(scores).enumerate() {
+                            *value = score * scale + if j > i { f32::NEG_INFINITY } else { 0.0 };
+                        }
+                        let max = row.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+                        let ln_sum = row.iter().map(|v| (v - max).exp()).sum::<f32>().ln();
+                        for value in row.iter_mut() {
+                            *value = ((*value - max) - ln_sum).exp();
+                        }
+                    });
+            }
+        }
+        Ok(Self::node(
+            data,
+            vec![batch, t, t],
+            Op::CausalAttention,
+            vec![self.clone(), k.clone()],
+        )
+        .with_backend(backend))
+    }
+
+    /// Junta matrizes ao longo de `axis` (0: empilha linhas, 1: lado a lado nas colunas).
+    /// Junta as cabeças da atenção numa matriz só, para uma única projeção de saída.
+    pub fn concat(parts: &[Self], axis: usize) -> Result<Self> {
+        if parts.is_empty() || axis > 1 || parts.iter().any(|p| p.rank() != 2) {
+            return Err(TensorError::InvalidShape(
+                "concat needs matrices and axis 0 or 1",
+            ));
+        }
+        let fixed = parts[0].shape()[1 - axis];
+        if parts.iter().any(|p| p.shape()[1 - axis] != fixed) {
+            return Err(TensorError::ShapeMismatch);
+        }
+        let joined = parts.iter().map(|p| p.shape()[axis]).sum::<usize>();
+        let shape = if axis == 0 {
+            vec![joined, fixed]
+        } else {
+            vec![fixed, joined]
+        };
+        let mut data = Vec::new();
+        data.try_reserve_exact(element_count(&shape)?)?;
+        if axis == 0 {
+            for part in parts {
+                data.extend_from_slice(part.data());
+            }
+        } else {
+            for row in 0..fixed {
+                for part in parts {
+                    let width = part.shape()[1];
+                    data.extend_from_slice(&part.data()[row * width..(row + 1) * width]);
+                }
+            }
+        }
+        Ok(Self::node(data, shape, Op::Concat { axis }, parts.to_vec()))
+    }
+
     /// Mesmos dados com outro shape; a quantidade de elementos precisa coincidir.
     pub fn reshape(&self, shape: &[usize]) -> Result<Self> {
         let expected = element_count(shape)?;
@@ -145,10 +317,9 @@ impl Tensor {
                 actual: self.numel(),
             });
         }
-        let mut data = zeros_buffer(self.numel())?;
-        data.copy_from_slice(self.data());
-        Ok(Self::node(
-            data,
+        // Os dados são imutáveis: o nó novo compartilha o buffer do pai.
+        Ok(Self::shared_node(
+            std::sync::Arc::clone(self.storage()),
             shape.to_vec(),
             Op::Reshape,
             vec![self.clone()],
@@ -158,9 +329,12 @@ impl Tensor {
     /// GELU com aproximação tanh (GPT-2/BERT).
     pub fn gelu(&self) -> Result<Self> {
         let mut data = zeros_buffer(self.numel())?;
-        for (out, &x) in data.iter_mut().zip(self.data()) {
-            *out = 0.5 * x * (1.0 + (GELU_C * (x + GELU_K * x * x * x)).tanh());
-        }
+        // Elemento a elemento: em paralelo, mesmo resultado (tanh é o custo dominante).
+        data.par_iter_mut()
+            .zip(self.data().par_iter())
+            .for_each(|(out, &x)| {
+                *out = 0.5 * x * (1.0 + (GELU_C * (x + GELU_K * x * x * x)).tanh());
+            });
         Ok(self.unary(data, Op::Gelu))
     }
 
@@ -244,7 +418,7 @@ impl Tensor {
     }
 }
 
-fn row_stats(x: &[f32]) -> (f32, f32) {
+pub(crate) fn row_stats(x: &[f32]) -> (f32, f32) {
     let n = x.len() as f32;
     let mean = x.iter().sum::<f32>() / n;
     let var = x.iter().map(|v| (v - mean) * (v - mean)).sum::<f32>() / n;
@@ -279,11 +453,15 @@ pub(crate) fn unary_backward(
             }
         }
         Op::Gelu => {
-            for ((out, grad), &x) in target.iter_mut().zip(g).zip(parent.data()) {
-                let t = (GELU_C * (x + GELU_K * x * x * x)).tanh();
-                let du = GELU_C * (1.0 + 3.0 * GELU_K * x * x);
-                *out += grad * (0.5 * (1.0 + t) + 0.5 * x * (1.0 - t * t) * du);
-            }
+            target
+                .par_iter_mut()
+                .zip(g.par_iter())
+                .zip(parent.data().par_iter())
+                .for_each(|((out, grad), &x)| {
+                    let t = (GELU_C * (x + GELU_K * x * x * x)).tanh();
+                    let du = GELU_C * (1.0 + 3.0 * GELU_K * x * x);
+                    *out += grad * (0.5 * (1.0 + t) + 0.5 * x * (1.0 - t * t) * du);
+                });
         }
         Op::Softmax | Op::LogSoftmax | Op::LayerNorm => {
             let width = *node.shape().last().expect("row ops have rank >= 1");

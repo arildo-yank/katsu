@@ -8,13 +8,19 @@ use std::fmt;
 
 use rayon::prelude::*;
 
-use crate::{Tensor, TensorError};
+use crate::{tensor::zeros_buffer, Tensor, TensorError};
 
 type Result<T> = std::result::Result<T, TensorError>;
 
 /// Otimizador que transforma parâmetros com gradiente em novas folhas.
 pub trait Optimizer {
     fn step(&mut self, params: &[Tensor]) -> Result<Vec<Tensor>>;
+    /// Como `step`, mas recebe os parâmetros por valor: o otimizador pode reaproveitar o
+    /// buffer de quem não tem outro dono (sem grafo vivo apontando para ele) em vez de
+    /// alocar um conjunto novo de pesos. Em erro, os parâmetros recebidos são descartados.
+    fn step_owned(&mut self, params: Vec<Tensor>) -> Result<Vec<Tensor>> {
+        self.step(&params)
+    }
     fn learning_rate(&self) -> f32;
 }
 
@@ -194,6 +200,89 @@ impl Adam {
     }
 }
 
+/// Constantes de um passo do Adam, já com a correção de viés.
+#[derive(Clone, Copy)]
+struct AdamStep {
+    beta1: f32,
+    beta2: f32,
+    lr: f32,
+    eps: f32,
+    correction1: f32,
+    correction2: f32,
+}
+
+impl AdamStep {
+    /// Atualiza momentos e escreve o peso novo em `out`. Sem `source`, o peso atual é o
+    /// próprio `out` (atualização no lugar). Cada elemento é independente: dividir em
+    /// blocos entre threads não muda o resultado, e os dois caminhos fazem a mesma conta.
+    fn apply(
+        self,
+        out: &mut [f32],
+        source: Option<&[f32]>,
+        grad: &[f32],
+        m: &mut [f32],
+        v: &mut [f32],
+    ) {
+        const CHUNK: usize = 1 << 14;
+        let update = |out: &mut [f32],
+                      values: Option<&[f32]>,
+                      grad: &[f32],
+                      m: &mut [f32],
+                      v: &mut [f32]| {
+            for (i, (((out, &g), m), v)) in out.iter_mut().zip(grad).zip(m).zip(v).enumerate() {
+                let value = values.map_or(*out, |values| values[i]);
+                *m = self.beta1 * *m + (1.0 - self.beta1) * g;
+                *v = self.beta2 * *v + (1.0 - self.beta2) * g * g;
+                let m_hat = *m / self.correction1;
+                let v_hat = *v / self.correction2;
+                *out = value - self.lr * m_hat / (v_hat.sqrt() + self.eps);
+            }
+        };
+        let chunks = out
+            .par_chunks_mut(CHUNK)
+            .zip(grad.par_chunks(CHUNK))
+            .zip(m.par_chunks_mut(CHUNK).zip(v.par_chunks_mut(CHUNK)))
+            .enumerate();
+        chunks.for_each(|(i, ((out, grad), (m, v)))| {
+            let values = source.map(|s| &s[i * CHUNK..i * CHUNK + out.len()]);
+            update(out, values, grad, m, v);
+        });
+    }
+}
+
+impl Adam {
+    /// Cria os momentos no primeiro passo ou confere que batem com os parâmetros.
+    fn prepare(&mut self, params: &[Tensor]) -> Result<()> {
+        if self.moments.is_empty() {
+            for param in params {
+                self.moments
+                    .push((vec![0.0; param.numel()], vec![0.0; param.numel()]));
+            }
+        } else if self.moments.len() != params.len()
+            || self
+                .moments
+                .iter()
+                .zip(params)
+                .any(|(m, p)| m.0.len() != p.numel())
+        {
+            return Err(TensorError::OptimizerState);
+        }
+        Ok(())
+    }
+
+    fn advance(&mut self) -> AdamStep {
+        self.step = self.step.saturating_add(1);
+        AdamStep {
+            beta1: self.beta1,
+            beta2: self.beta2,
+            lr: self.learning_rate,
+            eps: self.eps,
+            correction1: 1.0 - self.beta1.powi(self.step),
+            correction2: 1.0 - self.beta2.powi(self.step),
+        }
+    }
+}
+
 impl Optimizer for Adam {
     /// Valida tudo antes de alterar o estado: um erro não consome um passo.
     fn step(&mut self, params: &[Tensor]) -> Result<Vec<Tensor>> {
@@ -212,55 +301,20 @@ impl Optimizer for Adam {
                     .ok_or(TensorError::MissingGradient { index })?,
             );
         }
-        if self.moments.is_empty() {
-            for param in params {
-                self.moments
-                    .push((vec![0.0; param.numel()], vec![0.0; param.numel()]));
-            }
-        } else if self.moments.len() != params.len()
-            || self
-                .moments
-                .iter()
-                .zip(params)
-                .any(|(m, p)| m.0.len() != p.numel())
-        {
-            return Err(TensorError::OptimizerState);
-        }
+        self.prepare(params)?;
         let mut buffers = Vec::new();
         buffers.try_reserve_exact(params.len())?;
         for param in params {
-            let mut data = Vec::new();
-            data.try_reserve_exact(param.numel())?;
-            data.resize(param.numel(), 0.0);
-            buffers.push(data);
+            buffers.push(zeros_buffer(param.numel())?);
         }
-        self.step = self.step.saturating_add(1);
-        let correction1 = 1.0 - self.beta1.powi(self.step);
-        let correction2 = 1.0 - self.beta2.powi(self.step);
-        let (beta1, beta2, lr, eps) = (self.beta1, self.beta2, self.learning_rate, self.eps);
-        // Cada elemento é independente: dividir em blocos entre threads não muda o resultado.
-        const CHUNK: usize = 1 << 14;
+        let constants = self.advance();
         for (((param, grad), (m, v)), data) in params
             .iter()
             .zip(&grads)
             .zip(&mut self.moments)
             .zip(&mut buffers)
         {
-            data.par_chunks_mut(CHUNK)
-                .zip(param.data().par_chunks(CHUNK))
-                .zip(grad.par_chunks(CHUNK))
-                .zip(m.par_chunks_mut(CHUNK).zip(v.par_chunks_mut(CHUNK)))
-                .for_each(|(((out, values), grad), (m, v))| {
-                    for ((((out, &value), &g), m), v) in
-                        out.iter_mut().zip(values).zip(grad).zip(m).zip(v)
-                    {
-                        *m = beta1 * *m + (1.0 - beta1) * g;
-                        *v = beta2 * *v + (1.0 - beta2) * g * g;
-                        let m_hat = *m / correction1;
-                        let v_hat = *v / correction2;
-                        *out = value - lr * m_hat / (v_hat.sqrt() + eps);
-                    }
-                });
+            constants.apply(data, Some(param.data()), grad, m, v);
         }
         drop(grads);
         drop(guards);
@@ -271,6 +325,52 @@ impl Optimizer for Adam {
         }
         Ok(updated)
     }
+
+    /// Pesos sem outro dono são atualizados no próprio buffer e perdem o gradiente na
+    /// hora; só os compartilhados ganham buffer novo. Valida e aloca antes de alterar
+    /// os momentos, como `step`.
+    fn step_owned(&mut self, params: Vec<Tensor>) -> Result<Vec<Tensor>> {
+        for (index, param) in params.iter().enumerate() {
+            if param.grad()?.is_none() {
+                return Err(TensorError::MissingGradient { index });
+            }
+        }
+        self.prepare(&params)?;
+        let mut spare = Vec::new();
+        spare.try_reserve_exact(params.len())?;
+        for param in &params {
+            spare.push(if param.is_unique() {
+                None
+            } else {
+                Some(zeros_buffer(param.numel())?)
+            });
+        }
+        let mut updated = Vec::new();
+        updated.try_reserve_exact(params.len())?;
+        let constants = self.advance();
+        for ((param, (m, v)), spare) in params.into_iter().zip(&mut self.moments).zip(spare) {
+            match param.try_into_parts() {
+                Ok(mut parts) => {
+                    let grad = parts.grad.take().ok_or(TensorError::OptimizerState)?;
+                    constants.apply(&mut parts.data, None, &grad, m, v);
+                    drop(grad);
+                    updated.push(Tensor::new(parts.data, &parts.shape)?);
+                }
+                Err(param) => {
+                    let mut data = match spare {
+                        Some(data) => data,
+                        None => zeros_buffer(param.numel())?,
+                    };
+                    let guard = param.grad()?;
+                    let grad = guard.as_deref().ok_or(TensorError::OptimizerState)?;
+                    constants.apply(&mut data, Some(param.data()), grad, m, v);
+                    updated.push(Tensor::new(data, param.shape())?);
+                }
+            }
+        }
+        Ok(updated)
+    }
+
     fn learning_rate(&self) -> f32 {
         self.learning_rate
     }

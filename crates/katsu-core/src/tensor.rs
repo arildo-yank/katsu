@@ -1,3 +1,4 @@
+use rayon::prelude::*;
 use std::{
     collections::{HashMap, HashSet, TryReserveError},
     error::Error,
@@ -126,6 +127,10 @@ pub enum Op {
     GatherRows,
     CrossEntropy,
     Conv2D { stride: usize, padding: usize },
+    Concat { axis: usize },
+    CausalAttention,
+    Linear,
+    LayerNormAffine,
     Sum,
     Relu,
     Transpose,
@@ -143,7 +148,8 @@ pub enum Op {
 pub struct Tensor(Arc<TensorNode>);
 
 struct TensorNode {
-    data: Vec<f32>,
+    // Arc: reshape compartilha os dados do pai em vez de copiá-los. Nunca muda depois de criado.
+    data: Arc<Vec<f32>>,
     shape: Vec<usize>,
     grad: RwLock<Option<Vec<f32>>>,
     retain_grad: AtomicBool,
@@ -241,6 +247,16 @@ impl Tensor {
     }
 
     pub(crate) fn node(data: Vec<f32>, shape: Vec<usize>, op: Op, parents: Vec<Self>) -> Self {
+        Self::shared_node(Arc::new(data), shape, op, parents)
+    }
+
+    /// Nó que reaproveita um buffer existente (ex.: reshape), sem copiar os dados.
+    pub(crate) fn shared_node(
+        data: Arc<Vec<f32>>,
+        shape: Vec<usize>,
+        op: Op,
+        parents: Vec<Self>,
+    ) -> Self {
         Self(Arc::new(TensorNode {
             data,
             shape,
@@ -261,6 +277,32 @@ impl Tensor {
     pub(crate) fn with_backend(mut self, backend: Arc<dyn crate::Backend>) -> Self {
         Arc::get_mut(&mut self.0).expect("new backend node").backend = Some(backend);
         self
+    }
+
+    pub(crate) fn storage(&self) -> &Arc<Vec<f32>> {
+        &self.0.data
+    }
+
+    /// Este handle é o único dono do nó e do buffer de dados.
+    pub(crate) fn is_unique(&self) -> bool {
+        Arc::strong_count(&self.0) == 1 && Arc::strong_count(&self.0.data) == 1
+    }
+
+    /// Dados, shape e gradiente por valor, quando este handle é o único dono do nó e do
+    /// buffer (ninguém mais pode observá-los). Senão devolve o próprio tensor intacto.
+    pub(crate) fn try_into_parts(self) -> Result<OwnedParts, Self> {
+        if !self.is_unique() {
+            return Err(self);
+        }
+        let mut node = Arc::try_unwrap(self.0).map_err(Self)?;
+        let data = std::mem::take(&mut node.data);
+        let data = Arc::try_unwrap(data).unwrap_or_else(|shared| shared.as_ref().clone());
+        let grad = node.grad.get_mut().map(Option::take).unwrap_or_default();
+        Ok(OwnedParts {
+            data,
+            shape: std::mem::take(&mut node.shape),
+            grad,
+        })
     }
 
     pub fn op(&self) -> Op {
@@ -538,20 +580,45 @@ impl Tensor {
             });
         }
         let order = self.topological_order();
+        Self::propagate(order, self.id(), seed)
+    }
+
+    /// Como `backward`, mas consome o grafo: cada nó intermediário sem outro dono é
+    /// liberado assim que seu gradiente chega aos pais. Os dados de um nó só servem ao
+    /// backward dele mesmo e dos filhos, que vêm antes na ordem reversa. Use quando a
+    /// perda não for mais necessária (leia o valor antes); gradientes ficam nas folhas.
+    pub fn backward_release(self) -> Result<(), TensorError> {
+        if self.numel() != 1 {
+            return Err(TensorError::NonScalarBackward);
+        }
+        let order = self.topological_order();
+        let root = self.id();
+        drop(self);
+        Self::propagate(order, root, &[1.0])
+    }
+
+    fn propagate(
+        mut order: Vec<Self>,
+        root: *const TensorNode,
+        seed: &[f32],
+    ) -> Result<(), TensorError> {
         // Adjuntos alocados sob demanda: só existem entre o primeiro filho
         // processado e o consumo do próprio nó, reduzindo o pico de memória.
         let mut pending = HashMap::new();
-        adjoint(&mut pending, self)?.copy_from_slice(seed);
-        let mut retained = Vec::new();
-        for node in order.iter().rev() {
+        pending.insert(root, seed.to_vec());
+        let (mut retained, mut gradients) = (Vec::new(), Vec::new());
+        // Ordem reversa, soltando cada handle depois do uso: sem outros donos, o nó
+        // (e seus dados) é liberado na hora.
+        while let Some(node) = order.pop() {
             let upstream = match pending.remove(&node.id()) {
                 Some(upstream) => upstream,
                 None => zeros_buffer(node.numel())?,
             };
-            node.op().backward(node, &upstream, &mut pending)?;
+            node.op().backward(&node, &upstream, &mut pending)?;
             // Adjuntos de intermediários não retidos são liberados assim que consumidos.
             if node.retains_grad() {
-                retained.push((node, upstream));
+                retained.push(node);
+                gradients.push(upstream);
             }
         }
         // Serializa apenas a publicação; VJPs e forwards podem executar em paralelo.
@@ -559,7 +626,7 @@ impl Tensor {
         let _publication = PUBLISH.lock().map_err(|_| TensorError::LockPoisoned)?;
         // Pré-valida todos os locks antes de modificar qualquer grad.
         let mut guards = Vec::new();
-        for (node, _) in &retained {
+        for node in &retained {
             guards.push(
                 node.0
                     .grad
@@ -567,7 +634,7 @@ impl Tensor {
                     .map_err(|_| TensorError::GradientBorrowed)?,
             );
         }
-        for ((_, gradient), mut stored) in retained.into_iter().zip(guards) {
+        for (gradient, mut stored) in gradients.into_iter().zip(guards) {
             if let Some(previous) = stored.as_mut() {
                 for (old, new) in previous.iter_mut().zip(gradient) {
                     *old += new;
@@ -578,6 +645,45 @@ impl Tensor {
         }
         Ok(())
     }
+}
+
+/// Soma `source` em `target`, elemento a elemento; em paralelo quando vale a pena.
+/// Cada elemento recebe exatamente a mesma soma do laço sequencial.
+fn accumulate(target: &mut [f32], source: &[f32]) {
+    const PARALLEL: usize = 1 << 16;
+    if target.len() >= PARALLEL {
+        target
+            .par_chunks_mut(PARALLEL / 4)
+            .zip(source.par_chunks(PARALLEL / 4))
+            .for_each(|(out, value)| {
+                for (out, value) in out.iter_mut().zip(value) {
+                    *out += value;
+                }
+            });
+    } else {
+        for (out, value) in target.iter_mut().zip(source) {
+            *out += value;
+        }
+    }
+}
+
+/// Entrega um gradiente completo ao pai. Na primeira contribuição o buffer vira o adjunto
+/// (0 + x = x), sem zerar memória nem somar; nas seguintes, soma.
+fn give(pending: &mut HashMap<*const TensorNode, Vec<f32>>, parent: &Tensor, gradient: Vec<f32>) {
+    use std::collections::hash_map::Entry;
+    match pending.entry(parent.id()) {
+        Entry::Occupied(mut entry) => accumulate(entry.get_mut(), &gradient),
+        Entry::Vacant(entry) => {
+            entry.insert(gradient);
+        }
+    }
+}
+
+/// Conteúdo de um tensor que tinha um único dono (ver `Tensor::try_into_parts`).
+pub(crate) struct OwnedParts {
+    pub(crate) data: Vec<f32>,
+    pub(crate) shape: Vec<usize>,
+    pub(crate) grad: Option<Vec<f32>>,
 }
 
 /// Buffer de adjunto do nó, criado com zeros na primeira contribuição.
@@ -611,10 +717,7 @@ impl Op {
                 )?;
                 // Empréstimos sequenciais também suportam pais com identidade igual.
                 for (parent, gradient) in node.parents().iter().zip([dx, dw]) {
-                    let target = adjoint(pending, parent)?;
-                    for (out, value) in target.iter_mut().zip(gradient) {
-                        *out += value;
-                    }
+                    give(pending, parent, gradient);
                 }
             }
             Self::Add | Self::Mul => {
@@ -640,9 +743,7 @@ impl Op {
                                 "backend returned wrong add gradient size",
                             ));
                         }
-                        for (out, value) in adjoint(pending, parent)?.iter_mut().zip(gradient) {
-                            *out += value;
-                        }
+                        give(pending, parent, gradient);
                     }
                     return Ok(());
                 }
@@ -683,6 +784,154 @@ impl Op {
                     }
                 }
             }
+            Self::CausalAttention => {
+                // Refaz kᵀ e reproduz os backward de softmax, + máscara, × escala e bmm na
+                // mesma ordem do grafo sem fusão; só as probabilidades ficaram guardadas.
+                let (q, k) = (&node.parents()[0], &node.parents()[1]);
+                let (batch, t, dh) = (q.shape()[0], q.shape()[1], q.shape()[2]);
+                if t == 0 || dh == 0 {
+                    return Ok(());
+                }
+                let scale = 1.0 / (dh as f32).sqrt();
+                let backend = node.0.backend.as_ref().expect("attention backend");
+                for b in 0..batch {
+                    let probs = &node.data()[b * t * t..(b + 1) * t * t];
+                    let mut scores = zeros_buffer(t * t)?;
+                    scores
+                        .par_chunks_mut(t)
+                        .zip(probs.par_chunks(t))
+                        .zip(g[b * t * t..(b + 1) * t * t].par_chunks(t))
+                        .for_each(|((out, y), gr)| {
+                            let dot: f32 = gr.iter().zip(y).map(|(a, b)| a * b).sum();
+                            for ((o, &gi), &yi) in out.iter_mut().zip(gr).zip(y) {
+                                *o = yi * (gi - dot) * scale;
+                            }
+                        });
+                    let span = b * t * dh..(b + 1) * t * dh;
+                    let kt = crate::ops::transposed(&k.data()[span.clone()], t, dh)?;
+                    let (dq, dkt) =
+                        backend.matmul_backward(&q.data()[span.clone()], &kt, &scores, t, dh, t)?;
+                    if dq.len() != t * dh || dkt.len() != dh * t {
+                        return Err(TensorError::InvalidShape(
+                            "backend returned wrong gradient size",
+                        ));
+                    }
+                    accumulate(&mut adjoint(pending, q)?[span.clone()], &dq);
+                    let target = &mut adjoint(pending, k)?[span];
+                    for i in 0..t {
+                        for j in 0..dh {
+                            target[i * dh + j] += dkt[j * t + i];
+                        }
+                    }
+                }
+            }
+            Self::Linear => {
+                let (x, w, bias) = (&node.parents()[0], &node.parents()[1], &node.parents()[2]);
+                let (m, k, n) = (x.shape()[0], x.shape()[1], w.shape()[1]);
+                if m == 0 || k == 0 || n == 0 {
+                    return Ok(());
+                }
+                // Bias: soma das linhas em buffer próprio, na ordem do add_backward.
+                let mut db = zeros_buffer(n)?;
+                for row in g.chunks(n) {
+                    for (out, value) in db.iter_mut().zip(row) {
+                        *out += value;
+                    }
+                }
+                for (out, value) in adjoint(pending, bias)?.iter_mut().zip(db) {
+                    *out += value;
+                }
+                let backend = node.0.backend.as_ref().expect("linear backend");
+                let (dx, dw) = backend.matmul_backward(x.data(), w.data(), g, m, k, n)?;
+                if dx.len() != m * k || dw.len() != k * n {
+                    return Err(TensorError::InvalidShape(
+                        "backend returned wrong gradient size",
+                    ));
+                }
+                for (parent, gradient) in [(x, dx), (w, dw)] {
+                    give(pending, parent, gradient);
+                }
+            }
+            Self::LayerNormAffine => {
+                let (x, gamma, beta) = (&node.parents()[0], &node.parents()[1], &node.parents()[2]);
+                let width = *x.shape().last().expect("layer norm has rank >= 1");
+                if width == 0 {
+                    return Ok(());
+                }
+                let rows = x.numel() / width;
+                // β: soma das linhas em buffer próprio, na ordem do add_backward.
+                let mut db = zeros_buffer(width)?;
+                for row in g.chunks(width) {
+                    for (out, value) in db.iter_mut().zip(row) {
+                        *out += value;
+                    }
+                }
+                for (out, value) in adjoint(pending, beta)?.iter_mut().zip(db) {
+                    *out += value;
+                }
+                // x̂ refeito de x; dγ += g·x̂ e dx̂ = g·γ, como no backward do mul.
+                let mut normalized = zeros_buffer(x.numel())?;
+                let mut stats = Vec::with_capacity(rows);
+                for (r, out) in normalized.chunks_mut(width).enumerate() {
+                    let row = &x.data()[r * width..(r + 1) * width];
+                    let (mean, inv_std) = crate::ops::row_stats(row);
+                    for (o, &value) in out.iter_mut().zip(row) {
+                        *o = (value - mean) * inv_std;
+                    }
+                    stats.push(inv_std);
+                }
+                let mut dy = zeros_buffer(x.numel())?;
+                for (i, (out, &grad)) in dy.iter_mut().zip(g).enumerate() {
+                    *out += grad * gamma.data()[i % width];
+                }
+                let target = adjoint(pending, gamma)?;
+                for (i, (&grad, &y)) in g.iter().zip(&normalized).enumerate() {
+                    target[i % width] += grad * y;
+                }
+                // dx = inv_std · (dx̂ - média(dx̂) - x̂ · média(dx̂·x̂)), como no layer_norm.
+                let target = adjoint(pending, x)?;
+                let n = width as f32;
+                for (r, inv_std) in stats.into_iter().enumerate() {
+                    let span = r * width..(r + 1) * width;
+                    let (y, gr, out) = (
+                        &normalized[span.clone()],
+                        &dy[span.clone()],
+                        &mut target[span],
+                    );
+                    let mean_g = gr.iter().sum::<f32>() / n;
+                    let mean_gy = gr.iter().zip(y).map(|(a, b)| a * b).sum::<f32>() / n;
+                    for ((o, &gi), &yi) in out.iter_mut().zip(gr).zip(y) {
+                        *o += inv_std * (gi - mean_g - yi * mean_gy);
+                    }
+                }
+            }
+            Self::Concat { axis } => {
+                // Cada pai recebe o seu pedaço do gradiente, na mesma posição do forward.
+                let total = node.shape()[1];
+                let mut offset = 0;
+                for parent in node.parents() {
+                    let (rows, width) = (parent.shape()[0], parent.shape()[1]);
+                    let target = adjoint(pending, parent)?;
+                    if axis == 0 {
+                        for (out, value) in target.iter_mut().zip(&g[offset..offset + rows * width])
+                        {
+                            *out += value;
+                        }
+                        offset += rows * width;
+                    } else {
+                        for row in 0..rows {
+                            let source = &g[row * total + offset..row * total + offset + width];
+                            for (out, value) in target[row * width..(row + 1) * width]
+                                .iter_mut()
+                                .zip(source)
+                            {
+                                *out += value;
+                            }
+                        }
+                        offset += width;
+                    }
+                }
+            }
             Self::Sum => {
                 let target = adjoint(pending, &node.parents()[0])?;
                 for out in target {
@@ -707,9 +956,7 @@ impl Op {
                         "backend returned wrong CE gradient size",
                     ));
                 }
-                for (out, value) in adjoint(pending, logits)?.iter_mut().zip(values) {
-                    *out += value;
-                }
+                give(pending, logits, values);
             }
             Self::GatherRows => {
                 let parent = &node.parents()[0];
@@ -753,12 +1000,11 @@ impl Op {
                         ));
                     }
                     for (parent, gradient, start) in [(a, da, i * m * k), (b, db, i * k * n)] {
-                        let target = adjoint(pending, parent)?;
-                        for (out, value) in target[start..start + gradient.len()]
-                            .iter_mut()
-                            .zip(gradient)
-                        {
-                            *out += value;
+                        if batch == 1 {
+                            give(pending, parent, gradient);
+                        } else {
+                            let target = adjoint(pending, parent)?;
+                            accumulate(&mut target[start..start + gradient.len()], &gradient);
                         }
                     }
                 }

@@ -1,7 +1,8 @@
 //! Perfil de um passo de pré-treino do `train_sft`, fase a fase, para planejar a aceleração.
 //!
-//!   cargo run --release -p katsu-core --example profile_step -- [batch] [perfil] [passos]
+//!   cargo run --release -p katsu-core --example profile_step -- [batch] [perfil] [passos] [backend]
 //!   perfil: 134m (padrão; 12×768, 12 cabeças, contexto 256, vocab 32004) ou small
+//!   backend: cpu (padrão, kernel próprio) ou accelerate (macOS, matmul pelo Accelerate)
 //!
 //! Repete as etapas de `update` em train_sft: forward + cross-entropy, backward, norma do
 //! gradiente, Adam e checagem de pesos. O backend é a CPU embrulhada num contador que registra,
@@ -24,9 +25,9 @@ struct Usage {
     time: Duration,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct Counting {
-    inner: CpuBackend,
+    inner: Arc<dyn Backend>,
     usage: Mutex<BTreeMap<&'static str, Usage>>,
 }
 
@@ -60,7 +61,7 @@ const F: usize = std::mem::size_of::<f32>();
 
 impl Backend for Counting {
     fn name(&self) -> &'static str {
-        "counting-cpu"
+        "counting"
     }
     fn matmul(&self, a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Result<Vec<f32>> {
         self.record(
@@ -143,6 +144,37 @@ impl Backend for Counting {
     }
 }
 
+/// Memória física do processo, em MB: (atual, pico desde o início). É o "peak memory footprint"
+/// do `/usr/bin/time -l` e inclui o que foi para o swap. Fora do macOS devolve None.
+#[cfg(target_os = "macos")]
+fn footprint() -> Option<(f64, f64)> {
+    #[repr(C)]
+    struct RusageInfoV4 {
+        uuid: [u8; 16],
+        fields: [u64; 35],
+    }
+    extern "C" {
+        fn proc_pid_rusage(pid: i32, flavor: i32, buffer: *mut RusageInfoV4) -> i32;
+    }
+    let mut info = RusageInfoV4 {
+        uuid: [0; 16],
+        fields: [0; 35],
+    };
+    // SAFETY: flavor 4 (RUSAGE_INFO_V4) preenche exatamente esta struct; o pid é o próprio processo.
+    let status = unsafe { proc_pid_rusage(std::process::id() as i32, 4, &mut info) };
+    // fields[7] = ri_phys_footprint, fields[28] = ri_lifetime_max_phys_footprint.
+    (status == 0).then(|| (info.fields[7] as f64 / 1e6, info.fields[28] as f64 / 1e6))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn footprint() -> Option<(f64, f64)> {
+    None
+}
+
+fn mb(sample: Option<(f64, f64)>) -> String {
+    sample.map_or_else(String::new, |(now, _)| format!("{now:.0} MB"))
+}
+
 fn secs(d: Duration) -> f64 {
     d.as_secs_f64()
 }
@@ -152,6 +184,12 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let batch: usize = args.next().map_or(Ok(1), |a| a.parse())?;
     let profile = args.next().unwrap_or_else(|| "134m".into());
     let steps: usize = args.next().map_or(Ok(2), |a| a.parse())?;
+    let inner: Arc<dyn Backend> = match args.next().as_deref().unwrap_or("cpu") {
+        "cpu" => Arc::new(CpuBackend::default()),
+        #[cfg(target_os = "macos")]
+        "accelerate" => Arc::new(katsu_core::AccelerateBackend::default()),
+        other => return Err(format!("backend desconhecido: {other}").into()),
+    };
     let config = match profile.as_str() {
         "134m" => KatsuLmConfig {
             vocab_size: 32004,
@@ -173,13 +211,17 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let started = Instant::now();
     let mut params = config.init(1)?;
     println!(
-        "perfil {profile}: {} parâmetros, batch {batch} × {} tokens, init {:.1}s, threads rayon {}",
+        "perfil {profile}: {} parâmetros, batch {batch} × {} tokens, backend {}, init {:.1}s, threads rayon {}",
         config.param_count(),
         window - 1,
+        inner.name(),
         secs(started.elapsed()),
         rayon::current_num_threads()
     );
-    let counting = Arc::new(Counting::default());
+    let counting = Arc::new(Counting {
+        inner,
+        usage: Mutex::default(),
+    });
     let backend: Arc<dyn Backend> = counting.clone();
     let mut adam = Adam::new(1e-4)?;
     let mut rng = SplitMix64(7);
@@ -196,10 +238,15 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let t0 = Instant::now();
         let loss = config.loss_batch_with_backend(&params, &refs, backend.clone())?;
         let forward = t0.elapsed();
+        let after_forward = footprint();
         let forward_usage = counting.take();
         let t1 = Instant::now();
-        loss.backward()?;
+        // Como no train_sft: lê a perda e consome o grafo no backward, liberando as
+        // ativações antes do Adam.
+        let loss_value = loss.data()[0];
+        loss.backward_release()?;
         let backward = t1.elapsed();
+        let after_backward = footprint();
         let backward_usage = counting.take();
         let t2 = Instant::now();
         let mut norm = 0.0f64;
@@ -211,12 +258,14 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         }
         let grad_norm = t2.elapsed();
         let t3 = Instant::now();
-        let next = adam.step(&params)?;
+        params = adam.step_owned(std::mem::take(&mut params))?;
         let adam_time = t3.elapsed();
+        let after_adam = footprint();
         let t4 = Instant::now();
-        let finite = next.iter().all(|p| p.data().iter().all(|x| x.is_finite()));
+        let finite = params
+            .iter()
+            .all(|p| p.data().iter().all(|x| x.is_finite()));
         let check = t4.elapsed();
-        params = next;
         let total = t0.elapsed();
         if step < steps {
             println!("passo {step} (aquecimento): {:.2}s", secs(total));
@@ -225,19 +274,19 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let tokens = (batch * (window - 1)) as f64;
         println!(
             "\npasso {step}: loss {:.3}, |g| {:.3}, pesos finitos {finite}",
-            loss.data()[0],
+            loss_value,
             norm.sqrt()
         );
-        println!("{:<26}{:>9}{:>8}", "fase", "s", "%");
-        for (name, d) in [
-            ("forward + cross-entropy", forward),
-            ("backward", backward),
-            ("norma do gradiente", grad_norm),
-            ("Adam (host)", adam_time),
-            ("checagem de pesos", check),
+        println!("{:<26}{:>9}{:>8}{:>16}", "fase", "s", "%", "memória ao fim");
+        for (name, d, memory) in [
+            ("forward + cross-entropy", forward, mb(after_forward)),
+            ("backward", backward, mb(after_backward)),
+            ("norma do gradiente", grad_norm, String::new()),
+            ("Adam (host)", adam_time, mb(after_adam)),
+            ("checagem de pesos", check, String::new()),
         ] {
             println!(
-                "{name:<26}{:>9.3}{:>7.1}%",
+                "{name:<26}{:>9.3}{:>7.1}%{memory:>16}",
                 secs(d),
                 100.0 * secs(d) / secs(total)
             );
@@ -286,6 +335,9 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             secs(backend_time)
         );
         println!("\nfora do Backend no forward+backward (LayerNorm, GELU, softmax, reshape, grafo): {host_ops:.3}s");
+        if let Some((_, peak)) = footprint() {
+            println!("pico de memória do processo (inclui swap): {peak:.0} MB");
+        }
         println!("por token: {:.2} GFLOP, {:.1} MB copiados entre host e GPU, {:.0} chamadas de kernel por passo",
             total_flops / 1e9 / tokens, (total_in + total_out) / 1e6 / tokens, total_calls as f64);
     }

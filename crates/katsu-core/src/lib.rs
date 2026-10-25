@@ -10,6 +10,11 @@ pub use backend::{create_cuda_backend, Backend, CpuBackend, GpuBackend};
 mod cuda;
 #[cfg(feature = "cuda")]
 pub use cuda::CudaBackend;
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
+mod accelerate;
+#[cfg(target_os = "macos")]
+pub use accelerate::AccelerateBackend;
 
 mod tensor;
 pub use tensor::{Op, Tensor, TensorError};

@@ -51,6 +51,45 @@ fn loss(
         .reshape(&[e.ids.len() - 1, c.vocab_size])?;
     masked_loss(&logits, e, backend)
 }
+
+/// Média das perdas mascaradas de vários exemplos num forward só. Cada exemplo é completado
+/// no fim (token 0) até o maior do lote: com atenção causal, o padding não afeta os tokens
+/// reais, e as posições continuam as mesmas do batch 1. Com um exemplo, é igual a `loss`.
+fn batch_loss(
+    c: &KatsuLmConfig,
+    p: &[Tensor],
+    batch: &[&Example],
+    backend: Arc<dyn Backend>,
+) -> Result<Tensor, katsu_core::TensorError> {
+    if let [e] = batch {
+        return loss(c, p, e, backend);
+    }
+    let width = batch.iter().map(|e| e.ids.len() - 1).max().unwrap_or(0);
+    let mut inputs = Vec::with_capacity(batch.len() * width);
+    for e in batch {
+        inputs.extend_from_slice(&e.ids[..e.ids.len() - 1]);
+        inputs.resize(inputs.len() + width + 1 - e.ids.len(), 0);
+    }
+    let logits = c
+        .forward_batch_with_backend(p, &inputs, batch.len(), backend.clone())?
+        .reshape(&[batch.len() * width, c.vocab_size])?;
+    let mut total: Option<Tensor> = None;
+    for (i, e) in batch.iter().enumerate() {
+        let rows: Vec<usize> = (e.answer_start - 1..e.ids.len() - 1)
+            .map(|r| i * width + r)
+            .collect();
+        let example = logits
+            .gather_rows(&rows)?
+            .cross_entropy_with_backend(&e.ids[e.answer_start..], backend.clone())?;
+        total = Some(match total {
+            Some(sum) => sum.add_with_backend(&example, backend.clone())?,
+            None => example,
+        });
+    }
+    total
+        .ok_or(katsu_core::TensorError::InvalidShape("empty batch"))?
+        .mul(&Tensor::scalar(1.0 / batch.len() as f32)?)
+}
 fn masked_loss(
     logits: &Tensor,
     e: &Example,
@@ -74,8 +113,10 @@ fn measure(
     }
     Ok(total / data.len() as f64)
 }
+/// Consome a perda e os pesos: o backward libera as ativações à medida que avança e o
+/// Adam atualiza no próprio buffer os pesos sem outro dono, sem alocar um conjunto novo.
 fn update(
-    params: &[Tensor],
+    params: Vec<Tensor>,
     loss: Tensor,
     opt: &mut Adam,
 ) -> Result<(Vec<Tensor>, f32, f64), Box<dyn std::error::Error>> {
@@ -83,9 +124,9 @@ fn update(
     if !value.is_finite() {
         return Err("nonfinite loss".into());
     }
-    loss.backward()?;
+    loss.backward_release()?;
     let mut norm = 0.;
-    for p in params {
+    for p in &params {
         let guard = p.grad()?;
         for &g in guard.as_ref().ok_or("missing gradient")? {
             if !g.is_finite() {
@@ -94,7 +135,7 @@ fn update(
             norm += f64::from(g).powi(2);
         }
     }
-    let next = opt.step(params)?;
+    let next = opt.step_owned(params)?;
     if next.iter().any(|p| p.data().iter().any(|x| !x.is_finite())) {
         return Err("nonfinite weights".into());
     }
@@ -225,16 +266,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "cpu" => Arc::new(CpuBackend::default()),
         #[cfg(feature = "cuda")]
         "cuda" => Arc::new(katsu_core::CudaBackend::new(0)?),
+        #[cfg(target_os = "macos")]
+        "accelerate" => Arc::new(katsu_core::AccelerateBackend::default()),
         _ => return Err("unsupported backend or missing cuda feature".into()),
     };
+    let batch: usize = std::env::var("KATSU_BATCH")
+        .unwrap_or_else(|_| "1".into())
+        .parse()?;
+    if !(1..=64).contains(&batch) {
+        return Err("KATSU_BATCH must be 1..=64".into());
+    }
     let large = old.embed_dim > 128 || old.layers > 4;
     let budget: u64 = std::env::var("KATSU_MEMORY_BUDGET_MIB")
         .unwrap_or_else(|_| "1024".into())
         .parse()?;
-    // Conservative planning estimate, not an OOM guarantee; Adam remains on host.
-    let estimate = (old.param_count() as u64 * 48).div_ceil(1024 * 1024) + 2048;
-    if large && (backend_name != "cuda" || estimate > budget) {
-        return Err(format!("large SFT requires CUDA and host budget >= {estimate} MiB").into());
+    // Conservative planning estimate, not an OOM guarantee. CUDA keeps Adam on host. On the
+    // Mac (Accelerate), measured 2026-10-25 on the 134M: weights + gradients + Adam moments
+    // = 16 bytes/param, ~1.1 MB/token of activations (≈300 MiB per 256-token window).
+    let estimate = if backend_name == "cuda" {
+        (old.param_count() as u64 * 48).div_ceil(1024 * 1024) + 2048
+    } else {
+        (old.param_count() as u64 * 16).div_ceil(1024 * 1024) + 300 * batch as u64 + 512
+    };
+    if large && (!matches!(backend_name.as_str(), "cuda" | "accelerate") || estimate > budget) {
+        return Err(format!(
+            "large SFT requires CUDA or Accelerate and KATSU_MEMORY_BUDGET_MIB >= {estimate}"
+        )
+        .into());
     }
     if old.embed_dim > 1024 || old.layers > 24 || old.vocab_size > 65536 {
         return Err("SFT architecture exceeds supported bounds".into());
@@ -266,7 +324,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let signature = json!({"data":fingerprint(&[base.join("tokenizer.bpe").as_path(), Path::new(&a[2]), Path::new(&a[3]), Path::new(&a[4])])?,
         "steps":steps,"adapt":adapt,"peak_sft_lr":learning_rate,"peak_corpus_lr":corpus_lr,
-        "warmup_ratio":warmup_ratio,"min_lr_ratio":min_lr_ratio,"config":[c.vocab_size,c.block_size,c.embed_dim,c.layers,c.heads]});
+        "warmup_ratio":warmup_ratio,"min_lr_ratio":min_lr_ratio,"config":[c.vocab_size,c.block_size,c.embed_dim,c.layers,c.heads],
+        "batch":batch});
     let mut resume_adam = None;
     let mut resume_phase = String::new();
     let mut resume_step = 0;
@@ -327,7 +386,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     metadata["checkpoint_every"] = json!(checkpoint_every);
     metadata["benchmark_only"] = json!(benchmark_only);
     metadata["corpus_tokens"] = json!(corpus.len());
-    metadata["batch_size"] = json!(1);
+    metadata["batch_size"] = json!(batch);
     metadata["train_sequence_length"] = json!(256);
     metadata["loss_mask"] = json!("assistant-only");
     metadata["markers"] = json!("KATSUBP2 reserved instruction IDs");
@@ -363,7 +422,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         adam.set_learning_rate(lr)?;
         let i = rng.below(corpus.len() - 256);
         let loss = c.loss_batch_with_backend(&params, &[&corpus[i..i + 257]], backend.clone())?;
-        let (next, value, norm) = update(&params, loss, &mut adam)?;
+        let (next, value, norm) = update(std::mem::take(&mut params), loss, &mut adam)?;
         params = next;
         if step % checkpoint_every == 0 {
             checkpoint(
@@ -414,9 +473,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let step_started = std::time::Instant::now();
         let lr = scheduled_lr(learning_rate, step, steps, warmup_ratio, min_lr_ratio);
         adam.set_learning_rate(lr)?;
-        let e = &train[rng.below(train.len())];
-        let (next, value, norm) =
-            update(&params, loss(&c, &params, e, backend.clone())?, &mut adam)?;
+        let examples: Vec<&Example> = (0..batch).map(|_| &train[rng.below(train.len())]).collect();
+        let step_loss = batch_loss(&c, &params, &examples, backend.clone())?;
+        let (next, value, norm) = update(std::mem::take(&mut params), step_loss, &mut adam)?;
         params = next;
         if step % checkpoint_every == 0 {
             checkpoint(
@@ -429,7 +488,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         writeln!(
             log,
             "{}",
-            json!({"phase":"sft","step":step,"epoch":adapt+step,"learning_rate":lr,"loss":value,"grad_l2":norm,"elapsed_seconds":started.elapsed().as_secs_f64(),"step_seconds":step_started.elapsed().as_secs_f64(),"input_tokens":e.ids.len()-1,"target_tokens":e.ids.len()-e.answer_start})
+            json!({"phase":"sft","step":step,"epoch":adapt+step,"learning_rate":lr,"loss":value,"grad_l2":norm,"elapsed_seconds":started.elapsed().as_secs_f64(),"step_seconds":step_started.elapsed().as_secs_f64(),"batch":batch,"input_tokens":examples.iter().map(|e|e.ids.len()-1).sum::<usize>(),"target_tokens":examples.iter().map(|e|e.ids.len()-e.answer_start).sum::<usize>()})
         )?;
         log.flush()?;
         if step % 100 == 0 {
@@ -494,7 +553,12 @@ mod tests {
         };
         let backend: Arc<dyn Backend> = Arc::new(CpuBackend::default());
         let mut adam = Adam::new(0.001).unwrap();
-        let (p, _, _) = update(&p, loss(&c, &p, &e, backend.clone()).unwrap(), &mut adam).unwrap();
+        let (p, _, _) = update(
+            p.clone(),
+            loss(&c, &p, &e, backend.clone()).unwrap(),
+            &mut adam,
+        )
+        .unwrap();
         let mut bytes = Vec::new();
         save_params(&p, &mut bytes).unwrap();
         adam.save_state(&mut bytes).unwrap();
@@ -503,10 +567,14 @@ mod tests {
         let mut restored = Adam::load_state(&mut reader, &loaded).unwrap();
         adam.set_learning_rate(0.0005).unwrap();
         restored.set_learning_rate(0.0005).unwrap();
-        let (expected, _, _) =
-            update(&p, loss(&c, &p, &e, backend.clone()).unwrap(), &mut adam).unwrap();
+        let (expected, _, _) = update(
+            p.clone(),
+            loss(&c, &p, &e, backend.clone()).unwrap(),
+            &mut adam,
+        )
+        .unwrap();
         let (actual, _, _) = update(
-            &loaded,
+            loaded.clone(),
             loss(&c, &loaded, &e, backend).unwrap(),
             &mut restored,
         )
@@ -561,5 +629,62 @@ mod tests {
         let g = g.as_ref().unwrap();
         assert_eq!(&g[..6], &[0.; 6]);
         assert!(g[6] < 0. && g[10] < 0.);
+    }
+
+    #[test]
+    fn batch_loss_is_the_mean_of_single_example_losses() {
+        let c = KatsuLmConfig {
+            vocab_size: 260,
+            block_size: 16,
+            embed_dim: 8,
+            layers: 1,
+            heads: 2,
+        };
+        let backend: Arc<dyn Backend> = Arc::new(CpuBackend::default());
+        let short = Example {
+            ids: vec![1, 2, 3, 4, 5],
+            answer_start: 3,
+        };
+        let long = Example {
+            ids: vec![9, 8, 7, 6, 5, 4, 3, 2],
+            answer_start: 5,
+        };
+        let grads = |p: &[Tensor]| -> Vec<Vec<f32>> {
+            p.iter()
+                .map(|t| {
+                    let g = t.grad().unwrap().clone().unwrap();
+                    t.zero_grad().unwrap();
+                    g
+                })
+                .collect()
+        };
+        let p = c.init(7).unwrap();
+
+        // Um exemplo: idêntico ao caminho antigo, bit a bit.
+        let single = loss(&c, &p, &short, backend.clone()).unwrap();
+        let batched = batch_loss(&c, &p, &[&short], backend.clone()).unwrap();
+        assert_eq!(single.data(), batched.data());
+
+        // Dois exemplos de tamanhos diferentes: média das perdas e dos gradientes.
+        let mut expected_loss = 0.;
+        let mut expected: Vec<Vec<f32>> = p.iter().map(|t| vec![0.; t.numel()]).collect();
+        for e in [&short, &long] {
+            let l = loss(&c, &p, e, backend.clone()).unwrap();
+            expected_loss += l.data()[0] / 2.;
+            l.backward().unwrap();
+            for (acc, g) in expected.iter_mut().zip(grads(&p)) {
+                for (a, v) in acc.iter_mut().zip(g) {
+                    *a += v / 2.;
+                }
+            }
+        }
+        let l = batch_loss(&c, &p, &[&short, &long], backend).unwrap();
+        assert!((l.data()[0] - expected_loss).abs() < 1e-5);
+        l.backward().unwrap();
+        for (acc, g) in expected.iter().zip(grads(&p)) {
+            for (a, b) in acc.iter().zip(g) {
+                assert!((a - b).abs() < 1e-5, "{a} vs {b}");
+            }
+        }
     }
 }

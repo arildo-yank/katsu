@@ -251,34 +251,42 @@ impl KatsuLmConfig {
             &params[0].gather_rows(tokens)?,
             &params[1].gather_rows(&positions)?,
         )?;
-        let mask = Tensor::causal_mask(t)?;
         let dh = self.embed_dim / self.heads;
-        let scale = Tensor::scalar(1.0 / (dh as f32).sqrt())?;
         let mm = |a: &Tensor, b: &Tensor| a.matmul_with_backend(b, backend.clone());
         for layer in 0..self.layers {
             let p = &params[2 + layer * self.per_layer()..2 + (layer + 1) * self.per_layer()];
-            let h = add(&x.layer_norm()?.mul(&p[LN1_G])?, &p[LN1_B])?;
+            let h = x.layer_norm_affine(&p[LN1_G], &p[LN1_B])?;
+            // Σ_h values_h·Wo_h = [values_1 … values_H]·[Wo_1; …; Wo_H]: uma projeção só,
+            // sem guardar uma saída [B·T, d] e uma soma residual por cabeça.
+            let mut heads = Vec::with_capacity(self.heads);
+            let mut out_weights = Vec::with_capacity(self.heads);
             for w in p[HEAD_START..HEAD_START + self.heads * PER_HEAD].chunks_exact(PER_HEAD) {
                 let q = mm(&h, &w[0])?.reshape(&[batch, t, dh])?;
                 let k = mm(&h, &w[1])?.reshape(&[batch, t, dh])?;
                 let v = mm(&h, &w[2])?.reshape(&[batch, t, dh])?;
-                let attention = q
-                    .bmm_with_backend(&k.transpose()?, backend.clone())?
-                    .mul(&scale)?
-                    .add_with_backend(&mask, backend.clone())?
-                    .softmax()?;
-                let values = attention
-                    .bmm_with_backend(&v, backend.clone())?
-                    .reshape(&[batch * t, dh])?;
-                x = add(&x, &mm(&values, &w[3])?)?;
+                let attention = q.causal_attention_with_backend(&k, backend.clone())?;
+                heads.push(
+                    attention
+                        .bmm_with_backend(&v, backend.clone())?
+                        .reshape(&[batch * t, dh])?,
+                );
+                out_weights.push(w[3].clone());
             }
+            let projection = mm(
+                &Tensor::concat(&heads, 1)?,
+                &Tensor::concat(&out_weights, 0)?,
+            )?;
+            drop(heads);
+            x = add(&x, &projection)?;
             let p = &p[HEAD_START + self.heads * PER_HEAD..];
-            let h = add(&x.layer_norm()?.mul(&p[0])?, &p[1])?;
-            let mlp = add(&mm(&h, &p[2])?, &p[3])?.gelu()?;
-            x = add(&x, &add(&mm(&mlp, &p[4])?, &p[5])?)?;
+            let h = x.layer_norm_affine(&p[0], &p[1])?;
+            let mlp = h
+                .linear_with_backend(&p[2], &p[3], backend.clone())?
+                .gelu()?;
+            x = add(&x, &mlp.linear_with_backend(&p[4], &p[5], backend.clone())?)?;
         }
         let head = &params[2 + self.layers * self.per_layer()..];
-        let normalized = add(&x.layer_norm()?.mul(&head[0])?, &head[1])?;
+        let normalized = x.layer_norm_affine(&head[0], &head[1])?;
         mm(&normalized, &head[2])?.reshape(&[batch, t, self.vocab_size])
     }
 

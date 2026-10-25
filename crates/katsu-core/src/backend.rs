@@ -116,12 +116,20 @@ impl Backend for CpuBackend {
     }
     fn cross_entropy(&self, logits: &[f32], targets: &[usize], classes: usize) -> Result<f32> {
         validate_ce(logits, targets, classes)?;
+        // Cada linha em paralelo; a soma final segue a ordem das linhas, como antes.
+        let rows: Vec<f32> = targets
+            .par_iter()
+            .enumerate()
+            .map(|(r, &label)| {
+                let row = &logits[r * classes..(r + 1) * classes];
+                let max = row.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+                let sum: f32 = row.iter().map(|&x| (x - max).exp()).sum();
+                sum.ln() - (row[label] - max)
+            })
+            .collect();
         let mut total = 0.0;
-        for (r, &label) in targets.iter().enumerate() {
-            let row = &logits[r * classes..(r + 1) * classes];
-            let max = row.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-            let sum: f32 = row.iter().map(|&x| (x - max).exp()).sum();
-            total += sum.ln() - (row[label] - max);
+        for value in rows {
+            total += value;
         }
         Ok(total / targets.len().max(1) as f32)
     }
@@ -134,16 +142,22 @@ impl Backend for CpuBackend {
     ) -> Result<Vec<f32>> {
         validate_ce(logits, targets, classes)?;
         let mut result = zeros_buffer(logits.len())?;
-        for (r, &label) in targets.iter().enumerate() {
-            let row = &logits[r * classes..(r + 1) * classes];
-            let max = row.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-            let sum: f32 = row.iter().map(|&x| (x - max).exp()).sum();
-            for (c, &x) in row.iter().enumerate() {
-                result[r * classes + c] = seed
-                    * ((x - max).exp() / sum - if c == label { 1.0 } else { 0.0 })
-                    / targets.len() as f32;
-            }
+        if classes == 0 {
+            return Ok(result);
         }
+        result
+            .par_chunks_mut(classes)
+            .zip(targets.par_iter())
+            .enumerate()
+            .for_each(|(r, (out, &label))| {
+                let row = &logits[r * classes..(r + 1) * classes];
+                let max = row.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+                let sum: f32 = row.iter().map(|&x| (x - max).exp()).sum();
+                for (c, (o, &x)) in out.iter_mut().zip(row).enumerate() {
+                    *o = seed * ((x - max).exp() / sum - if c == label { 1.0 } else { 0.0 })
+                        / targets.len() as f32;
+                }
+            });
         Ok(result)
     }
     fn name(&self) -> &'static str {
