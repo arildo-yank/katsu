@@ -712,7 +712,9 @@ mod gpu {
             Err(_) | Ok("reference16") => GemmKernel::Reference16,
             _ => return Err("KATSU_GEMM must be reference16".into()),
         };
-        let options = GpuTrainOptions { gemm };
+        // KATSU_FUSED=0 desliga as fusões da Etapa 2 (para medir o ganho delas)
+        let fused = std::env::var("KATSU_FUSED").as_deref() != Ok("0");
+        let options = GpuTrainOptions { gemm, fused };
         let pretrain_adam = if r.resume_phase == "pretrain" {
             r.resume_adam.take().ok_or("resume Adam")?
         } else {

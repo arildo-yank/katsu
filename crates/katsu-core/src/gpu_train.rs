@@ -42,15 +42,38 @@ pub enum GemmKernel {
 #[derive(Debug, Clone, Copy)]
 pub struct GpuTrainOptions {
     pub gemm: GemmKernel,
+    /// Etapa 2: bias, GELU e resíduo no epílogo do GEMM, e gelu' no GEMM do backward, em vez
+    /// de passadas separadas pela memória.
+    pub fused: bool,
 }
 
 impl Default for GpuTrainOptions {
     fn default() -> Self {
         Self {
             gemm: GemmKernel::Reference16,
+            fused: true,
         }
     }
 }
+
+/// O que o epílogo do GEMM faz além de escrever A·B (ver `epilogue` em train.cu).
+#[derive(Debug, Clone, Copy)]
+struct Epi {
+    bias: u64,
+    res: u64,
+    pre: u64,
+    /// 0: nada; 1: GELU guardando a entrada em `pre`; 2: multiplica por gelu'(pre)
+    mode: i32,
+    acc: bool,
+}
+const PLAIN: Epi = Epi {
+    bias: 0,
+    res: 0,
+    pre: 0,
+    mode: 0,
+    acc: false,
+};
+const ACC: Epi = Epi { acc: true, ..PLAIN };
 
 /// Argumento de kernel: o tipo precisa bater com a assinatura em train.cu.
 enum Arg {
@@ -450,25 +473,27 @@ impl GpuTrainer {
         self.run(name, (n.div_ceil(256) as u32, 1, 1), (256, 1, 1), 0, args)
     }
 
-    /// C[m,n] (+)= op(A)·op(B) (+ bias), row-major com leading dimensions.
-    #[allow(clippy::too_many_arguments)]
+    /// C[m,n] = op(A)·op(B) com o epílogo `e`, row-major com leading dimensions.
     fn gemm(
         &mut self,
         (a, ta, lda): (u64, bool, usize),
         (b, tb, ldb): (u64, bool, usize),
         (c, ldc): (u64, usize),
         (m, n, k): (usize, usize, usize),
-        bias: u64,
-        acc: bool,
+        e: Epi,
     ) -> Result<()> {
         if m.div_ceil(16) > 65535 {
             return Err(TensorError::InvalidShape("GEMM grid y exceeds 65535"));
         }
+        let acc = e.acc;
         let args = [
             P(a),
             P(b),
             P(c),
-            P(bias),
+            P(e.bias),
+            P(e.res),
+            P(e.pre),
+            I(e.mode),
             I(int(m)?),
             I(int(n)?),
             I(int(k)?),
@@ -676,8 +701,7 @@ impl GpuTrainer {
                 (at(self.w, s.wqkv), false, 3 * d),
                 (qkv, 3 * d),
                 (rows, 3 * d, d),
-                0,
-                false,
+                PLAIN,
             )?;
             self.run(
                 "attn_fwd",
@@ -694,13 +718,45 @@ impl GpuTrainer {
                     F(scale),
                 ],
             )?;
+            let (wo, w1, b1, w2, b2) = (
+                at(self.w, s.wo),
+                at(self.w, s.w1),
+                at(self.w, s.b1),
+                at(self.w, s.w2),
+                at(self.w, s.b2),
+            );
+            if self.options.fused {
+                // xmid = x + atty·Wo; gl = gelu(ln2·W1 + b1), guardando f1; próximo = xmid + gl·W2 + b2
+                let residual = Epi { res: x, ..PLAIN };
+                self.gemm(
+                    (atty, false, d),
+                    (wo, false, d),
+                    (xmid, d),
+                    (rows, d, d),
+                    residual,
+                )?;
+                self.layernorm(xmid, s.ln2_g, s.ln2_b, ln2, mean2, rstd2, rows)?;
+                let fc1 = Epi {
+                    bias: b1,
+                    pre: f1,
+                    mode: 1,
+                    ..PLAIN
+                };
+                self.gemm((ln2, false, d), (w1, false, f), (gl, f), (rows, f, d), fc1)?;
+                let fc2 = Epi {
+                    bias: b2,
+                    res: xmid,
+                    ..PLAIN
+                };
+                self.gemm((gl, false, f), (w2, false, d), (next, d), (rows, d, f), fc2)?;
+                continue;
+            }
             self.gemm(
                 (atty, false, d),
-                (at(self.w, s.wo), false, d),
+                (wo, false, d),
                 (a.tmp, d),
                 (rows, d, d),
-                0,
-                false,
+                PLAIN,
             )?;
             self.elementwise(
                 "add2",
@@ -710,30 +766,28 @@ impl GpuTrainer {
             self.layernorm(xmid, s.ln2_g, s.ln2_b, ln2, mean2, rstd2, rows)?;
             self.gemm(
                 (ln2, false, d),
-                (at(self.w, s.w1), false, f),
+                (w1, false, f),
                 (f1, f),
                 (rows, f, d),
-                0,
-                false,
+                PLAIN,
             )?;
             self.elementwise(
                 "bias_add",
                 rows * f,
-                &[P(f1), P(at(self.w, s.b1)), L(long(rows)), I(int(f)?)],
+                &[P(f1), P(b1), L(long(rows)), I(int(f)?)],
             )?;
             self.elementwise("gelu_fwd", rows * f, &[P(f1), P(gl), L(long(rows * f))])?;
             self.gemm(
                 (gl, false, f),
-                (at(self.w, s.w2), false, d),
+                (w2, false, d),
                 (a.tmp, d),
                 (rows, d, f),
-                0,
-                false,
+                PLAIN,
             )?;
             self.elementwise(
                 "bias_add",
                 rows * d,
-                &[P(a.tmp), P(at(self.w, s.b2)), L(long(rows)), I(int(d)?)],
+                &[P(a.tmp), P(b2), L(long(rows)), I(int(d)?)],
             )?;
             self.elementwise(
                 "add2",
@@ -756,8 +810,7 @@ impl GpuTrainer {
             (at(self.w, self.layout.head), false, vocab),
             (a.logits, vocab),
             (rows, vocab, d),
-            0,
-            false,
+            PLAIN,
         )?;
         let (tgt, wt, losses) = (
             self.tgt.device_ptr(&self.stream).0,
@@ -799,16 +852,14 @@ impl GpuTrainer {
             (at(w, head), true, vocab),
             (a.dh, d),
             (rows, d, vocab),
-            0,
-            false,
+            PLAIN,
         )?;
         self.gemm(
             (a.lnf, true, d),
             (a.logits, false, vocab),
             (at(g, head), vocab),
             (d, vocab, rows),
-            0,
-            true,
+            ACC,
         )?;
         self.elementwise("fill0", rows * d, &[P(a.dres), L(long(rows * d))])?;
         let last = at(a.x, c.layers * a.sd);
@@ -842,32 +893,41 @@ impl GpuTrainer {
             );
             let (f1, gl) = (at(a.f1, l * a.sf), at(a.gl, l * a.sf));
 
-            // MLP: dres é dL/dx da saída da camada
+            // MLP: dres é dL/dx da saída da camada. Fundido, dF1 = (dres·W2ᵀ)·gelu'(f1) sai
+            // direto do epílogo; sem fusão, o gelu' é uma passada a mais.
+            let dgelu = if self.options.fused {
+                Epi {
+                    pre: f1,
+                    mode: 2,
+                    ..PLAIN
+                }
+            } else {
+                PLAIN
+            };
             self.gemm(
                 (a.dres, false, d),
                 (at(w, s.w2), true, d),
                 (a.dbig, f),
                 (rows, f, d),
-                0,
-                false,
+                dgelu,
             )?;
             self.gemm(
                 (gl, true, f),
                 (a.dres, false, d),
                 (at(g, s.w2), d),
                 (f, d, rows),
-                0,
-                true,
+                ACC,
             )?;
             self.colsum(a.dres, at(g, s.b2), rows, d)?;
-            self.elementwise("gelu_bwd", rows * f, &[P(a.dbig), P(f1), L(long(rows * f))])?;
+            if !self.options.fused {
+                self.elementwise("gelu_bwd", rows * f, &[P(a.dbig), P(f1), L(long(rows * f))])?;
+            }
             self.gemm(
                 (ln2, true, d),
                 (a.dbig, false, f),
                 (at(g, s.w1), f),
                 (d, f, rows),
-                0,
-                true,
+                ACC,
             )?;
             self.colsum(a.dbig, at(g, s.b1), rows, f)?;
             self.gemm(
@@ -875,8 +935,7 @@ impl GpuTrainer {
                 (at(w, s.w1), true, f),
                 (a.dh, d),
                 (rows, d, f),
-                0,
-                false,
+                PLAIN,
             )?;
             self.layernorm_backward(a.dh, xmid, mean2, rstd2, s.ln2_g, s.ln2_b, rows)?;
             // atenção: dres agora é dL/dxmid
@@ -885,16 +944,14 @@ impl GpuTrainer {
                 (a.dres, false, d),
                 (at(g, s.wo), d),
                 (d, d, rows),
-                0,
-                true,
+                ACC,
             )?;
             self.gemm(
                 (a.dres, false, d),
                 (at(w, s.wo), true, d),
                 (a.datty, d),
                 (rows, d, d),
-                0,
-                false,
+                PLAIN,
             )?;
             self.run(
                 "attn_bwd_rows",
@@ -935,16 +992,14 @@ impl GpuTrainer {
                 (a.dqkv, false, 3 * d),
                 (at(g, s.wqkv), 3 * d),
                 (d, 3 * d, rows),
-                0,
-                true,
+                ACC,
             )?;
             self.gemm(
                 (a.dqkv, false, 3 * d),
                 (at(w, s.wqkv), true, 3 * d),
                 (a.dh, d),
                 (rows, d, 3 * d),
-                0,
-                false,
+                PLAIN,
             )?;
             self.layernorm_backward(a.dh, x, mean1, rstd1, s.ln1_g, s.ln1_b, rows)?;
         }

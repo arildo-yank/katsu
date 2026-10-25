@@ -189,6 +189,18 @@ fn reference_kernels_match_cpu_autograd() {
         tiny(),
         GpuTrainOptions {
             gemm: GemmKernel::Reference16,
+            fused: false,
+        },
+    );
+}
+
+#[test]
+fn fused_epilogues_match_cpu_autograd() {
+    check_parity(
+        tiny(),
+        GpuTrainOptions {
+            gemm: GemmKernel::Reference16,
+            fused: true,
         },
     );
 }
@@ -207,6 +219,7 @@ fn odd_sizes_match_cpu_autograd() {
         c,
         GpuTrainOptions {
             gemm: GemmKernel::Reference16,
+            fused: false,
         },
     );
 }

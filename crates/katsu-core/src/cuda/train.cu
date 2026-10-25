@@ -123,11 +123,23 @@ extern "C" __global__ void layernorm_bwd(const float* dout, const float* x, cons
     }
 }
 
-// C[M,N] (+)= op(A)[M,K]·op(B)[K,N] (+ bias[N]), row-major. op(A)[i,k] = ta ? A[k·lda+i] : A[i·lda+k].
-// Referência em tiles 16×16 (a da Etapa 1).
+// Epílogo comum dos GEMMs (Etapa 2: fusão). v = A·B da posição o = linha·ldc + col:
+//   + bias[col]; epi 1: guarda v em pre e aplica GELU; epi 2: multiplica por gelu'(pre[o]);
+//   com res: v = res[o] + v (resíduo, na ordem do host: x + f(x)); acc: C[o] += v.
+__device__ __forceinline__ void epilogue(float v, long long o, int col, float* C, const float* bias,
+                                         const float* res, float* pre, int epi, int acc) {
+    if (bias) v += bias[col];
+    if (epi == 1) { pre[o] = v; v = gelu(v); }
+    else if (epi == 2) v *= gelu_grad(pre[o]);
+    if (res) v = res[o] + v;
+    C[o] = acc ? C[o] + v : v;
+}
+
+// C[M,N] (+)= op(A)[M,K]·op(B)[K,N], row-major, com o epílogo acima.
+// op(A)[i,k] = ta ? A[k·lda+i] : A[i·lda+k]. Referência em tiles 16×16 (a da Etapa 1).
 extern "C" __global__ void gemm16(const float* A, const float* B, float* C, const float* bias,
-                                  int M, int N, int K, int lda, int ldb, int ldc, int ta, int tb,
-                                  int acc) {
+                                  const float* res, float* pre, int epi, int M, int N, int K,
+                                  int lda, int ldb, int ldc, int ta, int tb, int acc) {
     __shared__ float As[16][17], Bs[16][17];
     int row = blockIdx.y * 16 + threadIdx.y, col = blockIdx.x * 16 + threadIdx.x;
     float v = 0.0f;
@@ -141,11 +153,7 @@ extern "C" __global__ void gemm16(const float* A, const float* B, float* C, cons
         for (int p = 0; p < 16; ++p) v += As[threadIdx.y][p] * Bs[p][threadIdx.x];
         __syncthreads();
     }
-    if (row < M && col < N) {
-        long long o = (long long)row * ldc + col;
-        if (bias) v += bias[col];
-        C[o] = acc ? C[o] + v : v;
-    }
+    if (row < M && col < N) epilogue(v, (long long)row * ldc + col, col, C, bias, res, pre, epi, acc);
 }
 
 extern "C" __global__ void bias_add(float* x, const float* bias, long long rows, int cols) {
