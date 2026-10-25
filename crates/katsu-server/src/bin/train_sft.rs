@@ -709,8 +709,10 @@ mod gpu {
 
     pub(super) fn run(mut r: Run) -> Result<(), Box<dyn std::error::Error>> {
         let gemm = match std::env::var("KATSU_GEMM").as_deref() {
-            Err(_) | Ok("reference16") => GemmKernel::Reference16,
-            _ => return Err("KATSU_GEMM must be reference16".into()),
+            Ok("reference16") => GemmKernel::Reference16,
+            Err(_) | Ok("tiled64") => GemmKernel::Tiled64,
+            Ok("tf32") => GemmKernel::Tf32,
+            _ => return Err("KATSU_GEMM must be reference16, tiled64 or tf32".into()),
         };
         // KATSU_FUSED=0 desliga as fusões da Etapa 2 (para medir o ganho delas)
         let fused = std::env::var("KATSU_FUSED").as_deref() != Ok("0");

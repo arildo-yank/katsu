@@ -156,6 +156,61 @@ extern "C" __global__ void gemm16(const float* A, const float* B, float* C, cons
     if (row < M && col < N) epilogue(v, (long long)row * ldc + col, col, C, bias, res, pre, epi, acc);
 }
 
+// Etapa 3: tiles 64×64 com K em fatias de 16; 256 threads, cada uma com 4×4 resultados em
+// registradores (16 FMAs por par de leituras da memória compartilhada, contra 1 no gemm16).
+extern "C" __global__ void __launch_bounds__(256)
+gemm64(const float* A, const float* B, float* C, const float* bias, const float* res, float* pre,
+       int epi, int M, int N, int K, int lda, int ldb, int ldc, int ta, int tb, int acc) {
+    __shared__ float As[16][64 + 4];
+    __shared__ float Bs[16][64 + 4];
+    int tid = threadIdx.x, tx = tid & 15, ty = tid >> 4;
+    int r0 = blockIdx.y * 64, c0 = blockIdx.x * 64;
+    float sum[4][4];
+#pragma unroll
+    for (int r = 0; r < 4; ++r)
+#pragma unroll
+        for (int c = 0; c < 4; ++c) sum[r][c] = 0.0f;
+    for (int k0 = 0; k0 < K; k0 += 16) {
+        // carga na ordem contígua da memória global (transposta ou não)
+#pragma unroll
+        for (int l = 0; l < 4; ++l) {
+            int e = tid + l * 256, i, kk;
+            if (ta) { kk = e >> 6; i = e & 63; } else { i = e >> 4; kk = e & 15; }
+            int gi = r0 + i, gk = k0 + kk;
+            As[kk][i] = (gi < M && gk < K) ? (ta ? A[(long long)gk * lda + gi] : A[(long long)gi * lda + gk]) : 0.0f;
+        }
+#pragma unroll
+        for (int l = 0; l < 4; ++l) {
+            int e = tid + l * 256, j, kk;
+            if (tb) { j = e >> 4; kk = e & 15; } else { kk = e >> 6; j = e & 63; }
+            int gj = c0 + j, gk = k0 + kk;
+            Bs[kk][j] = (gj < N && gk < K) ? (tb ? B[(long long)gj * ldb + gk] : B[(long long)gk * ldb + gj]) : 0.0f;
+        }
+        __syncthreads();
+#pragma unroll
+        for (int kk = 0; kk < 16; ++kk) {
+            float a[4], b[4];
+#pragma unroll
+            for (int r = 0; r < 4; ++r) a[r] = As[kk][ty * 4 + r];
+#pragma unroll
+            for (int c = 0; c < 4; ++c) b[c] = Bs[kk][tx * 4 + c];
+#pragma unroll
+            for (int r = 0; r < 4; ++r)
+#pragma unroll
+                for (int c = 0; c < 4; ++c) sum[r][c] += a[r] * b[c];
+        }
+        __syncthreads();
+    }
+#pragma unroll
+    for (int r = 0; r < 4; ++r)
+#pragma unroll
+        for (int c = 0; c < 4; ++c) {
+            int gi = r0 + ty * 4 + r, gj = c0 + tx * 4 + c;
+            if (gi < M && gj < N)
+                epilogue(sum[r][c], (long long)gi * ldc + gj, gj, C, bias, res, pre, epi, acc);
+        }
+}
+
 extern "C" __global__ void bias_add(float* x, const float* bias, long long rows, int cols) {
     long long i = blockIdx.x * (long long)blockDim.x + threadIdx.x;
     if (i < rows * cols) x[i] += bias[i % cols];

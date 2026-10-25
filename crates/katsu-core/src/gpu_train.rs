@@ -37,6 +37,11 @@ fn at(base: u64, floats: usize) -> u64 {
 pub enum GemmKernel {
     /// Tiles 16×16 em memória compartilhada, um resultado por thread.
     Reference16,
+    /// Etapa 3: tiles 64×64, 4×4 resultados por thread em registradores (FP32).
+    Tiled64,
+    /// Etapa 3b: Tensor Cores (WMMA) com entradas em TF32 e acumulação em FP32. Pesos,
+    /// gradientes e Adam continuam em FP32; só os produtos perdem precisão (~1e-3 relativo).
+    Tf32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -97,6 +102,7 @@ const KERNELS: &[&str] = &[
     "layernorm_fwd",
     "layernorm_bwd",
     "gemm16",
+    "gemm64",
     "bias_add",
     "colsum_acc",
     "gelu_fwd",
@@ -263,12 +269,29 @@ impl GpuTrainer {
         unsafe { ctx.disable_event_tracking() };
         let stream = ctx.default_stream();
         let (major, minor) = ctx.compute_capability().map_err(error)?;
+        // O GEMM de Tensor Cores precisa de mma.h (dos headers do CUDA) e só entra quando pedido.
+        let tensor_cores = options.gemm == GemmKernel::Tf32;
+        let mut source = include_str!("cuda/train.cu").to_owned();
+        if tensor_cores {
+            if major < 8 {
+                return Err(TensorError::BackendUnavailable(
+                    "TF32 Tensor Cores need sm_80 or newer",
+                ));
+            }
+            source.push_str(include_str!("cuda/train_tc.cu"));
+        }
+        let cuda_home = std::env::var("CUDA_HOME").unwrap_or_else(|_| "/usr/local/cuda".into());
         let ptx = compile_ptx_with_opts(
-            include_str!("cuda/train.cu"),
+            source,
             CompileOptions {
                 options: vec![format!("--gpu-architecture=compute_{major}{minor}")],
                 prec_div: Some(true),
                 prec_sqrt: Some(true),
+                include_paths: if tensor_cores {
+                    vec![format!("{cuda_home}/include")]
+                } else {
+                    Vec::new()
+                },
                 ..Default::default()
             },
         )
@@ -277,6 +300,9 @@ impl GpuTrainer {
         let mut kernels = HashMap::new();
         for &name in KERNELS {
             kernels.insert(name, module.load_function(name).map_err(error)?);
+        }
+        if tensor_cores {
+            kernels.insert("gemm_tc", module.load_function("gemm_tc").map_err(error)?);
         }
 
         let total = layout.total;
@@ -504,14 +530,11 @@ impl GpuTrainer {
             I(tb as i32),
             I(acc as i32),
         ];
+        let tiles = |size: usize| (n.div_ceil(size) as u32, m.div_ceil(size) as u32, 1);
         match self.options.gemm {
-            GemmKernel::Reference16 => self.run(
-                "gemm16",
-                (n.div_ceil(16) as u32, m.div_ceil(16) as u32, 1),
-                (16, 16, 1),
-                0,
-                &args,
-            ),
+            GemmKernel::Reference16 => self.run("gemm16", tiles(16), (16, 16, 1), 0, &args),
+            GemmKernel::Tiled64 => self.run("gemm64", tiles(64), (256, 1, 1), 0, &args),
+            GemmKernel::Tf32 => self.run("gemm_tc", tiles(64), (128, 1, 1), 0, &args),
         }
     }
 

@@ -87,7 +87,31 @@ fn assert_close(name: &str, gpu: &[f32], cpu: &[f32], rtol: f32, atol: f32) {
     );
 }
 
+/// Tolerâncias relativas: FP32 (`STRICT`) ou produtos em TF32 (`TF32`, 10 bits de mantissa).
+#[derive(Clone, Copy)]
+struct Tol {
+    loss: f64,
+    grad: f32,
+    /// fração máxima de pesos que podem divergir no 1º passo do Adam (sinal de gradiente ~0)
+    flips: f64,
+}
+const STRICT: Tol = Tol {
+    loss: 1e-5,
+    grad: 1e-5,
+    flips: 1e-3,
+};
+const TF32: Tol = Tol {
+    loss: 2e-3,
+    grad: 3e-2,
+    flips: 5e-2,
+};
+
 fn check_parity(c: KatsuLmConfig, options: GpuTrainOptions) {
+    let tol = if options.gemm == GemmKernel::Tf32 {
+        TF32
+    } else {
+        STRICT
+    };
     let params = c.init(11).unwrap();
     let (a, b, d) = (
         tokens(1, 11, c.vocab_size),
@@ -112,7 +136,7 @@ fn check_parity(c: KatsuLmConfig, options: GpuTrainOptions) {
     let cpu = cpu_loss(&c, &params, &examples);
     let expected = f64::from(cpu.data()[0]);
     assert!(
-        (loss - expected).abs() <= 1e-5 * expected.abs(),
+        (loss - expected).abs() <= tol.loss * expected.abs(),
         "perda GPU {loss} vs CPU {expected}"
     );
     cpu.backward().unwrap();
@@ -120,7 +144,13 @@ fn check_parity(c: KatsuLmConfig, options: GpuTrainOptions) {
     for (i, (p, g)) in params.iter().zip(&grads).enumerate() {
         let host = p.grad().unwrap();
         let host = host.as_ref().expect("gradiente da CPU");
-        assert_close(&format!("grad[{i}] {:?}", p.shape()), g, host, 1e-5, 1e-10);
+        assert_close(
+            &format!("grad[{i}] {:?}", p.shape()),
+            g,
+            host,
+            tol.grad,
+            1e-10,
+        );
     }
 
     // um passo do Adam: mesmas constantes dos dois lados
@@ -133,7 +163,7 @@ fn check_parity(c: KatsuLmConfig, options: GpuTrainOptions) {
         .sum::<f64>()
         .sqrt();
     assert!(
-        (norm - expected_norm).abs() <= 1e-4 * expected_norm,
+        (norm - expected_norm).abs() <= (tol.grad as f64).max(1e-4) * expected_norm,
         "norma {norm} vs {expected_norm}"
     );
     assert_eq!(gpu.adam_step().unwrap(), 0);
@@ -150,7 +180,7 @@ fn check_parity(c: KatsuLmConfig, options: GpuTrainOptions) {
             .filter(|(a, b)| (*a - *b).abs() > 1e-6)
             .count();
         assert!(
-            flipped * 1000 <= x.numel().max(1000),
+            flipped as f64 <= tol.flips * x.numel().max(1000) as f64,
             "param[{i}]: {flipped} elementos divergem"
         );
         assert_close(
@@ -200,6 +230,46 @@ fn fused_epilogues_match_cpu_autograd() {
         tiny(),
         GpuTrainOptions {
             gemm: GemmKernel::Reference16,
+            fused: true,
+        },
+    );
+}
+
+#[test]
+fn tiled64_matches_cpu_autograd() {
+    check_parity(
+        tiny(),
+        GpuTrainOptions {
+            gemm: GemmKernel::Tiled64,
+            fused: true,
+        },
+    );
+}
+
+#[test]
+fn odd_sizes_tiled64_match_cpu_autograd() {
+    let c = KatsuLmConfig {
+        vocab_size: 53,
+        block_size: 20,
+        embed_dim: 48,
+        layers: 1,
+        heads: 3,
+    };
+    check_parity(
+        c,
+        GpuTrainOptions {
+            gemm: GemmKernel::Tiled64,
+            fused: true,
+        },
+    );
+}
+
+#[test]
+fn tf32_tensor_cores_match_cpu_autograd_within_tf32_precision() {
+    check_parity(
+        tiny(),
+        GpuTrainOptions {
+            gemm: GemmKernel::Tf32,
             fused: true,
         },
     );
