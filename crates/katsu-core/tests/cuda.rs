@@ -146,13 +146,36 @@ fn cuda_resident_store_matches_host_reference() -> Result<(), Box<dyn std::error
         let w1: Vec<_> = (0..12).map(|i| (i * 29 + step * 7) % 512).collect();
         let w2: Vec<_> = (0..12).map(|i| (i * 47 + step * 11) % 512).collect();
         let windows = [w1.as_slice(), w2.as_slice()];
-        let before = cuda_store.transfers();
+        let (before, host_before) = (cuda_store.transfers(), host_store.transfers());
         let h = cfg.loss_batch_with_backend(&host, &windows, cpu.clone())?;
         let c = cfg.loss_batch_with_backend(&cuda, &windows, cpu.clone())?;
         close(c.data(), h.data(), 3e-4, 3e-4);
         let (loss_host, loss_cuda) = (h.data()[0], c.data()[0]);
         h.backward_release()?;
         c.backward_release()?;
+        // Gradientes de todos os parâmetros (residentes lidos do store), relativos à escala de
+        // cada um: é aqui que um erro do store apareceria. 1e-3 como o teste híbrido acima: a partir
+        // do 2º passo os pesos já diferem no arredondamento e os gradientes herdam isso.
+        let grad = |p: &Tensor| -> Vec<f32> {
+            match p.residency() {
+                Some((store, view)) => store.read(katsu_core::Buffer::Grad, view).unwrap(),
+                None => p.grad().unwrap().clone().unwrap(),
+            }
+        };
+        let mut max_grad_error = 0.0f32;
+        for (i, (a, b)) in cuda.iter().zip(&host).enumerate() {
+            let (gc, gh) = (grad(a), grad(b));
+            let scale = gh.iter().fold(0.0f32, |m, x| m.max(x.abs())).max(1e-12);
+            let error = gc
+                .iter()
+                .zip(&gh)
+                .fold(0.0f32, |m, (x, y)| m.max((x - y).abs()));
+            assert!(
+                error <= 1e-3 * scale,
+                "step {step}, param {i}: grad error {error} vs scale {scale}"
+            );
+            max_grad_error = max_grad_error.max(error / scale);
+        }
         let (hs, hb) = host_store.grad_stats()?;
         let (cs, cb) = cuda_store.grad_stats()?;
         assert_eq!((hb, cb), (0, 0));
@@ -161,17 +184,28 @@ fn cuda_resident_store_matches_host_reference() -> Result<(), Box<dyn std::error
         let (next, bad) = co.step_resident(cuda, cuda_store.as_ref())?;
         assert_eq!(bad, 0);
         cuda = next;
-        let after = cuda_store.transfers();
-        let moved = after.to_device - before.to_device + after.to_host - before.to_host;
+        let delta = |a: katsu_core::Transfers, b: katsu_core::Transfers| {
+            a.to_device - b.to_device + a.to_host - b.to_host
+        };
+        let moved = delta(cuda_store.transfers(), before);
+        let reference = delta(host_store.transfers(), host_before);
+        // Mesma contabilidade do store de referência (que o teste de CPU prova não mover
+        // pesos); só a redução da norma devolve mais bytes (256 parciais em f64).
         assert!(
-            moved < weight_bytes,
-            "step {step}: {moved} bytes vs weights {weight_bytes}"
+            moved <= reference + 4096,
+            "step {step}: {moved} bytes vs reference {reference}"
         );
+        // Pesos só depois do 1º passo. Depois, o Adam divide cada gradiente pelo histórico do
+        // próprio elemento: onde o gradiente é ruído (~1e-7, com sinais opostos entre CPU e GPU),
+        // o passo vira ±lr inteiro nos dois lados. Medido na RTX 4090: o pior caso foi o embedding
+        // de tokens (no host), com gradientes iguais a 1e-5 da escala e pesos a 1,2e-3.
         let mut max_weight = 0.0f32;
-        for (a, b) in materialize(&cuda)?.iter().zip(materialize(&host)?.iter()) {
-            max_weight = max_weight.max(close(a.data(), b.data(), 5e-4, 5e-3));
+        if step == 0 {
+            for (a, b) in materialize(&cuda)?.iter().zip(materialize(&host)?.iter()) {
+                max_weight = max_weight.max(close(a.data(), b.data(), 5e-4, 5e-3));
+            }
         }
-        println!("{{\"step\":{},\"loss_host\":{},\"loss_cuda\":{},\"bytes_moved\":{moved},\"max_abs_weight_error\":{max_weight}}}", step + 1, loss_host, loss_cuda);
+        println!("{{\"step\":{},\"loss_host\":{},\"loss_cuda\":{},\"bytes_moved\":{moved},\"max_relative_grad_error\":{max_grad_error},\"max_abs_weight_error_step1\":{max_weight}}}", step + 1, loss_host, loss_cuda);
     }
     Ok(())
 }
