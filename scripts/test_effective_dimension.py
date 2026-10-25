@@ -92,6 +92,9 @@ class CheckpointTests(unittest.TestCase):
         self.assertLess(report["summary"]["attention_head_frac_min"], 0.26)
         self.assertGreater(report["summary"]["attention_head_frac_random"], 0.5)
         self.assertIn("dominant_vs_mean_logit", rows[("output", "head")])
+        # O resumo compara sempre todos os tokens; os tocados ficam à parte.
+        self.assertEqual(report["summary"]["embedding_pr"], rows[("embeddings", "wte")]["pr"])
+        self.assertEqual(report["summary"]["embedding_pr_touched"], rows[("embeddings", "wte_touched")]["pr"])
 
     def test_cli_writes_json_and_compares(self):
         out = self.run / "effdim.json"
@@ -100,7 +103,7 @@ class CheckpointTests(unittest.TestCase):
         saved = json.loads(out.read_text())
         self.assertIsNone(saved["sft_touched_tokens"])
         text = ed.format_report(ed.analyze(self.run), compare=saved)
-        self.assertIn("comparação com run", text)
+        self.assertIn("comparação: run (referência", text)
         self.assertIn("atenção frac média", text)
 
     def test_rejects_corrupt_or_mismatched_checkpoints(self):

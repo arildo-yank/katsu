@@ -128,7 +128,9 @@ def analyze(run, base_checkpoint=None, seed=0) -> dict:
 
     qk = [r for r in rows if r["name"].endswith(".QK")]
     summary = {
-        "embedding_pr": next(r["pr"] for r in rows if r["name"] == ("wte_touched" if touched is not None and touched.sum() >= 2 else "wte")),
+        # Todos os tokens, para comparar runs com e sem --base; os tocados vêm à parte.
+        "embedding_pr": next(r["pr"] for r in rows if r["name"] == "wte"),
+        "embedding_pr_touched": next((r["pr"] for r in rows if r["name"] == "wte_touched"), None),
         "output_top_direction": next(r["top"] for r in rows if r["name"] == "head"),
         "attention_head_frac_mean": float(np.mean([r["frac"] for r in qk])),
         "attention_head_frac_min": float(np.min([r["frac"] for r in qk])),
@@ -150,14 +152,15 @@ def format_report(report, compare=None) -> str:
         lines.append(f"{r['group']:10} {r['name']:12} {'x'.join(map(str, r['shape'])):>12} {r['erank']:7.1f} "
                      f"{r['frac']:5.2f} {r['pr']:7.1f} {r['d90']:5} {100 * r['top']:5.1f} | {r['random_frac']:6.2f}")
     lines += ["", "resumo (frac = erank / máximo; aleatório entre parênteses):",
-              f"  embeddings PR {s['embedding_pr']:.1f} de {c['embed_dim']}",
+              f"  embeddings PR {s['embedding_pr']:.1f} de {c['embed_dim']}"
+              + (f" (tokens tocados no SFT: {s['embedding_pr_touched']:.1f})" if s.get("embedding_pr_touched") else ""),
               f"  saída: direção dominante com {100 * s['output_top_direction']:.1f}% da variância",
               f"  atenção por cabeça: frac média {s['attention_head_frac_mean']:.2f}, mínima {s['attention_head_frac_min']:.2f} "
               f"({s['attention_head_frac_random']:.2f})",
               f"  MLP: frac média {s['mlp_frac_mean']:.2f}"]
     if compare:
         o = compare["summary"]
-        lines += ["", f"comparação com {compare['run']} (d={compare['config']['embed_dim']}):"]
+        lines += ["", f"comparação: {compare['run']} (referência, d={compare['config']['embed_dim']}) -> {report['run']}:"]
         for key, label in (("attention_head_frac_mean", "atenção frac média"), ("attention_head_frac_min", "atenção frac mínima"),
                            ("mlp_frac_mean", "MLP frac média"), ("output_top_direction", "saída: direção dominante")):
             lines.append(f"  {label:26} {o[key]:6.2f} -> {s[key]:6.2f}")
