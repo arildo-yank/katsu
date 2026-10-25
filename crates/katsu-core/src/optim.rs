@@ -200,22 +200,23 @@ impl Adam {
     }
 }
 
-/// Constantes de um passo do Adam, já com a correção de viés.
-#[derive(Clone, Copy)]
-struct AdamStep {
-    beta1: f32,
-    beta2: f32,
-    lr: f32,
-    eps: f32,
-    correction1: f32,
-    correction2: f32,
+/// Constantes de um passo do Adam, já com a correção de viés. Públicas para que um
+/// `ParamStore` faça exatamente a mesma conta no dispositivo.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AdamStep {
+    pub beta1: f32,
+    pub beta2: f32,
+    pub lr: f32,
+    pub eps: f32,
+    pub correction1: f32,
+    pub correction2: f32,
 }
 
 impl AdamStep {
     /// Atualiza momentos e escreve o peso novo em `out`. Sem `source`, o peso atual é o
     /// próprio `out` (atualização no lugar). Cada elemento é independente: dividir em
     /// blocos entre threads não muda o resultado, e os dois caminhos fazem a mesma conta.
-    fn apply(
+    pub(crate) fn apply(
         self,
         out: &mut [f32],
         source: Option<&[f32]>,
@@ -251,19 +252,21 @@ impl AdamStep {
 }
 
 impl Adam {
-    /// Cria os momentos no primeiro passo ou confere que batem com os parâmetros.
+    /// Cria os momentos no primeiro passo ou confere que batem com os parâmetros. Os de um
+    /// parâmetro residente ficam no store: aqui, vazios.
     fn prepare(&mut self, params: &[Tensor]) -> Result<()> {
+        let size = |p: &Tensor| if p.is_resident() { 0 } else { p.numel() };
         if self.moments.is_empty() {
             for param in params {
                 self.moments
-                    .push((vec![0.0; param.numel()], vec![0.0; param.numel()]));
+                    .push((vec![0.0; size(param)], vec![0.0; size(param)]));
             }
         } else if self.moments.len() != params.len()
             || self
                 .moments
                 .iter()
                 .zip(params)
-                .any(|(m, p)| m.0.len() != p.numel())
+                .any(|(m, p)| m.0.len() != size(p))
         {
             return Err(TensorError::OptimizerState);
         }
@@ -336,6 +339,19 @@ impl Optimizer for Adam {
             }
         }
         self.prepare(&params)?;
+        let constants = self.advance();
+        self.update_owned(params, constants)
+    }
+
+    fn learning_rate(&self) -> f32 {
+        self.learning_rate
+    }
+}
+
+impl Adam {
+    /// Corpo do `step_owned`, com as constantes do passo já calculadas. Parâmetros residentes
+    /// passam intactos: o store os atualiza.
+    fn update_owned(&mut self, params: Vec<Tensor>, constants: AdamStep) -> Result<Vec<Tensor>> {
         let mut spare = Vec::new();
         spare.try_reserve_exact(params.len())?;
         for param in &params {
@@ -347,8 +363,11 @@ impl Optimizer for Adam {
         }
         let mut updated = Vec::new();
         updated.try_reserve_exact(params.len())?;
-        let constants = self.advance();
         for ((param, (m, v)), spare) in params.into_iter().zip(&mut self.moments).zip(spare) {
+            if param.is_resident() {
+                updated.push(param);
+                continue;
+            }
             match param.try_into_parts() {
                 Ok(mut parts) => {
                     let grad = parts.grad.take().ok_or(TensorError::OptimizerState)?;
@@ -371,9 +390,118 @@ impl Optimizer for Adam {
         Ok(updated)
     }
 
-    fn learning_rate(&self) -> f32 {
-        self.learning_rate
+    /// Como `step_owned`, mas os parâmetros residentes são atualizados no próprio store, num
+    /// passo sobre a arena inteira, com as mesmas constantes dos demais. Devolve os parâmetros
+    /// e quantos pesos residentes ficaram não finitos.
+    pub fn step_resident(
+        &mut self,
+        params: Vec<Tensor>,
+        store: &dyn crate::ParamStore,
+    ) -> Result<(Vec<Tensor>, usize)> {
+        for (index, param) in params.iter().enumerate() {
+            match param.residency() {
+                Some((owner, _)) if !same_store(owner.as_ref(), store) => {
+                    return Err(TensorError::InvalidShape(
+                        "resident parameter belongs to another store",
+                    ))
+                }
+                Some(_) => {}
+                None if param.grad()?.is_none() => {
+                    return Err(TensorError::MissingGradient { index })
+                }
+                None => {}
+            }
+        }
+        if self.moments.is_empty() {
+            // Adam novo: os momentos de um treino anterior no mesmo store não valem mais.
+            for param in &params {
+                if let Some((_, view)) = param.residency() {
+                    let zeros = zeros_buffer(view.len)?;
+                    store.write(crate::Buffer::M, view, &zeros)?;
+                    store.write(crate::Buffer::V, view, &zeros)?;
+                }
+            }
+        }
+        self.prepare(&params)?;
+        let constants = self.advance();
+        let nonfinite = store.adam_step(constants)?;
+        Ok((self.update_owned(params, constants)?, nonfinite))
     }
+
+    /// Leva para o store os momentos dos parâmetros residentes (ex.: ao retomar um checkpoint
+    /// carregado no host) e os solta da memória do host.
+    pub fn offload_moments(&mut self, params: &[Tensor]) -> Result<()> {
+        if self.moments.is_empty() {
+            return Ok(());
+        }
+        if self.moments.len() != params.len() {
+            return Err(TensorError::OptimizerState);
+        }
+        for (param, (m, v)) in params.iter().zip(&mut self.moments) {
+            let Some((store, view)) = param.residency() else {
+                continue;
+            };
+            if m.is_empty() {
+                continue;
+            }
+            if m.len() != view.len {
+                return Err(TensorError::OptimizerState);
+            }
+            store.write(crate::Buffer::M, view, m)?;
+            store.write(crate::Buffer::V, view, v)?;
+            *m = Vec::new();
+            *v = Vec::new();
+        }
+        Ok(())
+    }
+
+    /// Mesmo formato do `save_state`, lendo do store os momentos dos parâmetros residentes:
+    /// o checkpoint não sabe onde o treino rodou.
+    pub fn save_state_resident(
+        &self,
+        w: &mut impl std::io::Write,
+        params: &[Tensor],
+    ) -> std::io::Result<()> {
+        use std::io::{Error, ErrorKind};
+        if !self.moments.is_empty() && self.moments.len() != params.len() {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "params do not match Adam",
+            ));
+        }
+        w.write_all(b"KATADAM1")?;
+        for value in [self.learning_rate, self.beta1, self.beta2, self.eps] {
+            w.write_all(&value.to_le_bytes())?;
+        }
+        w.write_all(&self.step.to_le_bytes())?;
+        w.write_all(&(self.moments.len() as u64).to_le_bytes())?;
+        for (param, (m, v)) in params.iter().zip(&self.moments) {
+            let read;
+            let (m, v) = match param.residency() {
+                Some((store, view)) => {
+                    let load = |b| store.read(b, view).map_err(|e| Error::other(e.to_string()));
+                    read = (load(crate::Buffer::M)?, load(crate::Buffer::V)?);
+                    (&read.0, &read.1)
+                }
+                None => (m, v),
+            };
+            w.write_all(&(m.len() as u64).to_le_bytes())?;
+            for values in [m, v] {
+                for value in values {
+                    w.write_all(&value.to_le_bytes())?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Mesmo objeto (compara só o endereço, não a vtable).
+fn same_store(a: &dyn crate::ParamStore, b: &dyn crate::ParamStore) -> bool {
+    std::ptr::eq(
+        a as *const dyn crate::ParamStore as *const (),
+        b as *const dyn crate::ParamStore as *const (),
+    )
 }
 
 /// Telemetria de uma época, no formato consumido pelo monitor arandu.

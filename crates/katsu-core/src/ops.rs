@@ -166,7 +166,15 @@ impl Tensor {
         if bias.shape() != [n] {
             return Err(TensorError::InvalidShape("linear bias must be [n]"));
         }
-        let mut data = backend.matmul(self.data(), weight.data(), m, k, n)?;
+        if self.is_resident() || bias.is_resident() {
+            return Err(TensorError::InvalidShape(
+                "resident tensors only as the linear weight",
+            ));
+        }
+        let mut data = match weight.residency() {
+            Some((store, view)) => store.matmul(self.data(), view, m, k, n)?,
+            None => backend.matmul(self.data(), weight.data(), m, k, n)?,
+        };
         if data.len() != m * n {
             return Err(TensorError::InvalidShape(
                 "backend returned wrong output size",
@@ -186,6 +194,99 @@ impl Tensor {
             vec![self.clone(), weight.clone(), bias.clone()],
         )
         .with_backend(backend))
+    }
+
+    /// `x·Wᵢ` para vários pesos `[k,n]` com a mesma entrada, saídas lado a lado: `[m, R·n]`.
+    /// Mesmas contas de R matmuls; num store residente a entrada sobe uma vez só e o
+    /// gradiente dela desce uma vez só (as projeções Q, K e V de todas as cabeças).
+    pub fn matmul_many_with_backend(
+        &self,
+        weights: &[Self],
+        backend: std::sync::Arc<dyn crate::Backend>,
+    ) -> Result<Self> {
+        let first = weights
+            .first()
+            .ok_or(TensorError::InvalidShape("matmul_many needs weights"))?;
+        if self.rank() != 2
+            || self.is_resident()
+            || first.rank() != 2
+            || first.shape()[0] != self.shape()[1]
+        {
+            return Err(TensorError::InvalidShape(
+                "matmul_many needs x [m,k] and W [k,n]",
+            ));
+        }
+        if weights.iter().any(|w| w.shape() != first.shape()) {
+            return Err(TensorError::ShapeMismatch);
+        }
+        let (m, k, n) = (self.shape()[0], self.shape()[1], first.shape()[1]);
+        let count = weights.len();
+        let data = match first.residency() {
+            Some((store, _)) => {
+                let mut views = Vec::with_capacity(count);
+                for w in weights {
+                    match w.residency() {
+                        Some((owner, view)) if std::sync::Arc::ptr_eq(owner, store) => {
+                            views.push(view)
+                        }
+                        _ => {
+                            return Err(TensorError::InvalidShape(
+                                "matmul_many weights must all be resident in one store",
+                            ))
+                        }
+                    }
+                }
+                store.matmul_many(self.data(), &views, m, k, n)?
+            }
+            None => {
+                if weights.iter().any(Self::is_resident) {
+                    return Err(TensorError::InvalidShape(
+                        "matmul_many weights must all be resident in one store",
+                    ));
+                }
+                let mut out = zeros_buffer(element_count(&[m, n * count])?)?;
+                for (i, w) in weights.iter().enumerate() {
+                    let part = backend.matmul(self.data(), w.data(), m, k, n)?;
+                    if part.len() != m * n {
+                        return Err(TensorError::InvalidShape(
+                            "backend returned wrong output size",
+                        ));
+                    }
+                    crate::resident::put_columns(&mut out, &part, m, n, count, i);
+                }
+                out
+            }
+        };
+        if data.len() != m * n * count {
+            return Err(TensorError::InvalidShape(
+                "store returned wrong output size",
+            ));
+        }
+        let mut parents = Vec::with_capacity(count + 1);
+        parents.push(self.clone());
+        parents.extend(weights.iter().cloned());
+        Ok(Self::node(data, vec![m, n * count], Op::MatmulMany, parents).with_backend(backend))
+    }
+
+    /// Colunas `[start, start + width)` de uma matriz, numa matriz nova `[m, width]`.
+    pub fn columns(&self, start: usize, width: usize) -> Result<Self> {
+        if self.rank() != 2
+            || start
+                .checked_add(width)
+                .is_none_or(|end| end > self.shape()[1])
+        {
+            return Err(TensorError::InvalidShape("columns out of range"));
+        }
+        let (rows, total) = (self.shape()[0], self.shape()[1]);
+        let mut data = Vec::new();
+        data.try_reserve_exact(rows * width)?;
+        for row in 0..rows {
+            data.extend_from_slice(&self.data()[row * total + start..row * total + start + width]);
+        }
+        Ok(
+            Self::node(data, vec![rows, width], Op::Columns, vec![self.clone()])
+                .with_indices(&[start, width]),
+        )
     }
 
     /// `layer_norm(x)·γ + β` por linha, num nó só: mesmas contas de
@@ -291,6 +392,9 @@ impl Tensor {
         } else {
             vec![fixed, joined]
         };
+        if parts.iter().any(Self::is_resident) {
+            return resident_concat(parts, axis, &shape);
+        }
         let mut data = Vec::new();
         data.try_reserve_exact(element_count(&shape)?)?;
         if axis == 0 {
@@ -310,6 +414,9 @@ impl Tensor {
 
     /// Mesmos dados com outro shape; a quantidade de elementos precisa coincidir.
     pub fn reshape(&self, shape: &[usize]) -> Result<Self> {
+        if self.is_resident() {
+            return Err(TensorError::InvalidShape("reshape of a resident tensor"));
+        }
         let expected = element_count(shape)?;
         if expected != self.numel() {
             return Err(TensorError::DataLength {
@@ -505,4 +612,29 @@ pub(crate) fn unary_backward(
         }
         _ => unreachable!("not a unary op: {op:?}"),
     }
+}
+
+/// Linhas de faixas vizinhas do mesmo store já são uma matriz contígua na arena: o concat
+/// vira uma folha residente sobre a faixa toda, sem copiar. Os gradientes caem direto nas
+/// faixas de cada parte.
+fn resident_concat(parts: &[Tensor], axis: usize, shape: &[usize]) -> Result<Tensor> {
+    let not_adjacent =
+        || TensorError::InvalidShape("resident concat needs adjacent views on axis 0");
+    let (store, first) = parts[0].residency().ok_or_else(not_adjacent)?;
+    let mut end = first.offset;
+    for part in parts {
+        match part.residency() {
+            Some((owner, view))
+                if axis == 0 && std::sync::Arc::ptr_eq(owner, store) && view.offset == end =>
+            {
+                end += view.len;
+            }
+            _ => return Err(not_adjacent()),
+        }
+    }
+    let view = crate::View {
+        offset: first.offset,
+        len: end - first.offset,
+    };
+    Tensor::resident(store.clone(), view, shape)
 }

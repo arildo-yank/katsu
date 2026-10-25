@@ -1,5 +1,6 @@
 use katsu_core::{
-    load_params, save_params, Adam, BpeTokenizer, KatsuLmConfig, Optimizer, SplitMix64, Tensor,
+    arena_len, load_params, materialize, save_params, upload, Adam, BpeTokenizer, KatsuLmConfig,
+    Optimizer, ParamStore, SplitMix64, Tensor,
 };
 use katsu_core::{Backend, CpuBackend};
 use serde::Deserialize;
@@ -119,6 +120,7 @@ fn update(
     params: Vec<Tensor>,
     loss: Tensor,
     opt: &mut Adam,
+    store: Option<&dyn ParamStore>,
 ) -> Result<(Vec<Tensor>, f32, f64), Box<dyn std::error::Error>> {
     let value = loss.data()[0];
     if !value.is_finite() {
@@ -126,7 +128,7 @@ fn update(
     }
     loss.backward_release()?;
     let mut norm = 0.;
-    for p in &params {
+    for p in params.iter().filter(|p| !p.is_resident()) {
         let guard = p.grad()?;
         for &g in guard.as_ref().ok_or("missing gradient")? {
             if !g.is_finite() {
@@ -135,15 +137,45 @@ fn update(
             norm += f64::from(g).powi(2);
         }
     }
-    let next = opt.step_owned(params)?;
-    if next.iter().any(|p| p.data().iter().any(|x| !x.is_finite())) {
+    let next = match store {
+        // Pesos residentes: norma e checagens rodam no store, sem trazer o gradiente.
+        Some(store) => {
+            let (sum, nonfinite) = store.grad_stats()?;
+            if nonfinite > 0 {
+                return Err("nonfinite gradient".into());
+            }
+            norm += sum;
+            let (next, nonfinite) = opt.step_resident(params, store)?;
+            if nonfinite > 0 {
+                return Err("nonfinite weights".into());
+            }
+            next
+        }
+        None => opt.step_owned(params)?,
+    };
+    if next
+        .iter()
+        .filter(|p| !p.is_resident())
+        .any(|p| p.data().iter().any(|x| !x.is_finite()))
+    {
         return Err("nonfinite weights".into());
     }
     Ok((next, value, norm.sqrt()))
 }
+/// Backend do host para as operações que não usam pesos residentes.
+fn host_backend() -> Arc<dyn Backend> {
+    #[cfg(target_os = "macos")]
+    {
+        Arc::new(katsu_core::AccelerateBackend::default())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Arc::new(CpuBackend::default())
+    }
+}
 fn save(p: &[Tensor], path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let mut f = BufWriter::new(File::create(path)?);
-    save_params(p, &mut f)?;
+    save_params(&materialize(p)?, &mut f)?;
     f.flush()?;
     Ok(())
 }
@@ -168,8 +200,9 @@ fn checkpoint(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let temporary = path.with_extension("ckpt.tmp");
     let mut writer = BufWriter::new(File::create(&temporary)?);
-    save_params(params, &mut writer)?;
-    adam.save_state(&mut writer)?;
+    // Mesmo formato com ou sem pesos residentes: os do store são lidos de volta.
+    save_params(&materialize(params)?, &mut writer)?;
+    adam.save_state_resident(&mut writer, params)?;
     serde_json::to_writer(&mut writer, state)?;
     writer.flush()?;
     writer.get_ref().sync_all()?;
@@ -262,7 +295,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("invalid SFT configuration".into());
     }
     let backend_name = std::env::var("KATSU_BACKEND").unwrap_or_else(|_| "cpu".into());
-    let backend: Arc<dyn Backend> = match backend_name.as_str() {
+    let mut backend: Arc<dyn Backend> = match backend_name.as_str() {
         "cpu" => Arc::new(CpuBackend::default()),
         #[cfg(feature = "cuda")]
         "cuda" => Arc::new(katsu_core::CudaBackend::new(0)?),
@@ -397,6 +430,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         serde_json::to_vec_pretty(&metadata)?,
     )?;
     save(&params, &output.join("migrated.ckpt"))?;
+    // KATSU_RESIDENT=1: pesos de matmul, gradientes e Adam ficam no store (na VRAM com
+    // KATSU_BACKEND=cuda); as demais operações rodam no host, sem cópia
+    // (KATSU_RESIDENT_REST=device as mantém no backend escolhido).
+    let store: Option<Arc<dyn ParamStore>> =
+        if std::env::var("KATSU_RESIDENT").as_deref() == Ok("1") {
+            let layout = c.resident_layout();
+            let len = arena_len(&params, &layout)?;
+            let store: Arc<dyn ParamStore> = match backend_name.as_str() {
+                #[cfg(feature = "cuda")]
+                "cuda" => Arc::new(katsu_core::CudaBackend::new(0)?.param_store(len)?),
+                _ => Arc::new(katsu_core::HostParamStore::new(len, backend.clone())?),
+            };
+            params = upload(std::mem::take(&mut params), &layout, store.clone())?;
+            if let Some(adam) = resume_adam.as_mut() {
+                adam.offload_moments(&params)?;
+            }
+            if std::env::var("KATSU_RESIDENT_REST").as_deref() != Ok("device") {
+                backend = host_backend();
+            }
+            metadata["resident_store"] = json!(store.name());
+            metadata["resident_parameters"] = json!(len);
+            metadata["rest_backend"] = json!(backend.name());
+            fs::write(
+                output.join("config.json"),
+                serde_json::to_vec_pretty(&metadata)?,
+            )?;
+            Some(store)
+        } else {
+            None
+        };
+    let moved = || {
+        store.as_ref().map(|s| {
+            let t = s.transfers();
+            t.to_device + t.to_host
+        })
+    };
     let mut log = BufWriter::new(File::create(output.join("metrics.jsonl"))?);
     let mut rng = SplitMix64(resume_rng);
     let mut adam = if resume_phase == "pretrain" {
@@ -422,7 +491,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         adam.set_learning_rate(lr)?;
         let i = rng.below(corpus.len() - 256);
         let loss = c.loss_batch_with_backend(&params, &[&corpus[i..i + 257]], backend.clone())?;
-        let (next, value, norm) = update(std::mem::take(&mut params), loss, &mut adam)?;
+        let before = moved();
+        let (next, value, norm) = update(
+            std::mem::take(&mut params),
+            loss,
+            &mut adam,
+            store.as_deref(),
+        )?;
+        let transfer_bytes = moved().zip(before).map(|(a, b)| a - b);
         params = next;
         if step % checkpoint_every == 0 {
             checkpoint(
@@ -435,7 +511,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         writeln!(
             log,
             "{}",
-            json!({"phase":if fresh {"pretrain"} else {"adapt"},"step":step,"epoch":step,"learning_rate":lr,"loss":value,"grad_l2":norm,"step_seconds":step_started.elapsed().as_secs_f64(),"input_tokens":256,"target_tokens":256})
+            json!({"phase":if fresh {"pretrain"} else {"adapt"},"step":step,"epoch":step,"learning_rate":lr,"loss":value,"grad_l2":norm,"step_seconds":step_started.elapsed().as_secs_f64(),"input_tokens":256,"target_tokens":256,"transfer_bytes":transfer_bytes})
         )?;
         log.flush()?;
     }
@@ -475,7 +551,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         adam.set_learning_rate(lr)?;
         let examples: Vec<&Example> = (0..batch).map(|_| &train[rng.below(train.len())]).collect();
         let step_loss = batch_loss(&c, &params, &examples, backend.clone())?;
-        let (next, value, norm) = update(std::mem::take(&mut params), step_loss, &mut adam)?;
+        let before = moved();
+        let (next, value, norm) = update(
+            std::mem::take(&mut params),
+            step_loss,
+            &mut adam,
+            store.as_deref(),
+        )?;
+        let transfer_bytes = moved().zip(before).map(|(a, b)| a - b);
         params = next;
         if step % checkpoint_every == 0 {
             checkpoint(
@@ -488,7 +571,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         writeln!(
             log,
             "{}",
-            json!({"phase":"sft","step":step,"epoch":adapt+step,"learning_rate":lr,"loss":value,"grad_l2":norm,"elapsed_seconds":started.elapsed().as_secs_f64(),"step_seconds":step_started.elapsed().as_secs_f64(),"batch":batch,"input_tokens":examples.iter().map(|e|e.ids.len()-1).sum::<usize>(),"target_tokens":examples.iter().map(|e|e.ids.len()-e.answer_start).sum::<usize>()})
+            json!({"phase":"sft","step":step,"epoch":adapt+step,"learning_rate":lr,"loss":value,"grad_l2":norm,"elapsed_seconds":started.elapsed().as_secs_f64(),"step_seconds":step_started.elapsed().as_secs_f64(),"batch":batch,"input_tokens":examples.iter().map(|e|e.ids.len()-1).sum::<usize>(),"target_tokens":examples.iter().map(|e|e.ids.len()-e.answer_start).sum::<usize>(),"transfer_bytes":transfer_bytes})
         )?;
         log.flush()?;
         if step % 100 == 0 {
@@ -557,6 +640,7 @@ mod tests {
             p.clone(),
             loss(&c, &p, &e, backend.clone()).unwrap(),
             &mut adam,
+            None,
         )
         .unwrap();
         let mut bytes = Vec::new();
@@ -571,12 +655,14 @@ mod tests {
             p.clone(),
             loss(&c, &p, &e, backend.clone()).unwrap(),
             &mut adam,
+            None,
         )
         .unwrap();
         let (actual, _, _) = update(
             loaded.clone(),
             loss(&c, &loaded, &e, backend).unwrap(),
             &mut restored,
+            None,
         )
         .unwrap();
         for (a, b) in actual.iter().zip(expected) {

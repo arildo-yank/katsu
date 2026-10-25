@@ -9,7 +9,7 @@ pub use backend::{create_cuda_backend, Backend, CpuBackend, GpuBackend};
 #[allow(unsafe_code)]
 mod cuda;
 #[cfg(feature = "cuda")]
-pub use cuda::CudaBackend;
+pub use cuda::{CudaBackend, CudaParamStore};
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
 mod accelerate;
@@ -26,7 +26,12 @@ mod ops;
 pub use ops::LAYER_NORM_EPS;
 
 mod optim;
-pub use optim::{fit, Adam, EpochMetrics, Optimizer, Sgd};
+pub use optim::{fit, Adam, AdamStep, EpochMetrics, Optimizer, Sgd};
+
+mod resident;
+pub use resident::{
+    arena_len, materialize, upload, Buffer, HostParamStore, ParamStore, Transfers, View,
+};
 
 mod lm;
 pub use lm::{

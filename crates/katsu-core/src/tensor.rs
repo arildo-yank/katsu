@@ -124,6 +124,8 @@ pub enum Op {
     Mul,
     Matmul,
     BatchedMatmul,
+    MatmulMany,
+    Columns,
     GatherRows,
     CrossEntropy,
     Conv2D { stride: usize, padding: usize },
@@ -157,6 +159,15 @@ struct TensorNode {
     op: Op,
     backend: Option<Arc<dyn crate::Backend>>,
     indices: Vec<usize>,
+    // Folha cujos números vivem num ParamStore (data fica vazio): só serve de lado direito de
+    // matmul/linear, e o gradiente é acumulado no próprio store.
+    resident: Option<Residency>,
+}
+
+#[derive(Clone)]
+struct Residency {
+    store: Arc<dyn crate::ParamStore>,
+    view: crate::View,
 }
 
 /// Desmonta o grafo iterativamente: o drop recursivo padrão estoura a pilha
@@ -176,6 +187,14 @@ impl Drop for TensorNode {
 impl fmt::Debug for Tensor {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // Não percorre recursivamente o grafo (pode ser grande ou compartilhado).
+        if let Some(resident) = &self.0.resident {
+            return f
+                .debug_struct("Tensor")
+                .field("resident", &resident.store.name())
+                .field("view", &resident.view)
+                .field("shape", &self.shape())
+                .finish();
+        }
         f.debug_struct("Tensor")
             .field("data", &self.data())
             .field("shape", &self.shape())
@@ -236,14 +255,52 @@ impl Tensor {
     pub fn shape(&self) -> &[usize] {
         &self.0.shape
     }
+    /// Dados no host. Um tensor residente não tem cópia no host: use `materialize`.
     pub fn data(&self) -> &[f32] {
+        assert!(
+            self.0.resident.is_none(),
+            "tensor residente: os números estão no ParamStore; use katsu_core::materialize"
+        );
         &self.0.data
     }
     pub fn rank(&self) -> usize {
         self.0.shape.len()
     }
     pub fn numel(&self) -> usize {
-        self.0.data.len()
+        match &self.0.resident {
+            Some(resident) => resident.view.len,
+            None => self.0.data.len(),
+        }
+    }
+
+    /// Folha residente: `view` do store com o `shape` dado. Sem cópia no host.
+    pub fn resident(
+        store: Arc<dyn crate::ParamStore>,
+        view: crate::View,
+        shape: &[usize],
+    ) -> Result<Self, TensorError> {
+        crate::resident::check_view(store.capacity(), view)?;
+        let expected = element_count(shape)?;
+        if view.len != expected {
+            return Err(TensorError::DataLength {
+                expected,
+                actual: view.len,
+            });
+        }
+        let mut tensor = Self::node(Vec::new(), copy_shape(shape)?, Op::Leaf, Vec::new());
+        Arc::get_mut(&mut tensor.0)
+            .expect("new resident node")
+            .resident = Some(Residency { store, view });
+        Ok(tensor)
+    }
+
+    /// Store e faixa de um tensor residente.
+    pub fn residency(&self) -> Option<(&Arc<dyn crate::ParamStore>, crate::View)> {
+        self.0.resident.as_ref().map(|r| (&r.store, r.view))
+    }
+
+    pub fn is_resident(&self) -> bool {
+        self.0.resident.is_some()
     }
 
     pub(crate) fn node(data: Vec<f32>, shape: Vec<usize>, op: Op, parents: Vec<Self>) -> Self {
@@ -266,6 +323,7 @@ impl Tensor {
             op,
             backend: None,
             indices: Vec::new(),
+            resident: None,
         }))
     }
 
@@ -440,6 +498,11 @@ impl Tensor {
         batched: bool,
     ) -> Result<Self, TensorError> {
         let rank = if batched { 3 } else { 2 };
+        if self.is_resident() || (batched && rhs.is_resident()) {
+            return Err(TensorError::InvalidShape(
+                "resident tensors only as the rhs of a 2D matmul",
+            ));
+        }
         if self.rank() != rank || rhs.rank() != rank {
             return Err(if batched {
                 TensorError::InvalidShape("bmm needs rank 3")
@@ -472,7 +535,16 @@ impl Tensor {
             vec![m, n]
         };
         let mut data = zeros_buffer(element_count(&shape)?)?;
-        if m != 0 && n != 0 && k != 0 {
+        if let Some((store, view)) = rhs.residency() {
+            if m != 0 && n != 0 && k != 0 {
+                data = store.matmul(self.data(), view, m, k, n)?;
+                if data.len() != m * n {
+                    return Err(TensorError::InvalidShape(
+                        "store returned wrong output size",
+                    ));
+                }
+            }
+        } else if m != 0 && n != 0 && k != 0 {
             for i in 0..batch {
                 let result = backend.matmul(
                     &self.data()[i * m * k..(i + 1) * m * k],
@@ -610,6 +682,11 @@ impl Tensor {
         // Ordem reversa, soltando cada handle depois do uso: sem outros donos, o nó
         // (e seus dados) é liberado na hora.
         while let Some(node) = order.pop() {
+            if node.is_resident() {
+                // O gradiente já foi somado no store pelo backward do matmul.
+                pending.remove(&node.id());
+                continue;
+            }
             let upstream = match pending.remove(&node.id()) {
                 Some(upstream) => upstream,
                 None => zeros_buffer(node.numel())?,
@@ -841,6 +918,16 @@ impl Op {
                 for (out, value) in adjoint(pending, bias)?.iter_mut().zip(db) {
                     *out += value;
                 }
+                if let Some((store, view)) = w.residency() {
+                    let dx = store.matmul_backward(x.data(), view, g, m, k, n)?;
+                    if dx.len() != m * k {
+                        return Err(TensorError::InvalidShape(
+                            "store returned wrong gradient size",
+                        ));
+                    }
+                    give(pending, x, dx);
+                    return Ok(());
+                }
                 let backend = node.0.backend.as_ref().expect("linear backend");
                 let (dx, dw) = backend.matmul_backward(x.data(), w.data(), g, m, k, n)?;
                 if dx.len() != m * k || dw.len() != k * n {
@@ -902,6 +989,60 @@ impl Op {
                     let mean_gy = gr.iter().zip(y).map(|(a, b)| a * b).sum::<f32>() / n;
                     for ((o, &gi), &yi) in out.iter_mut().zip(gr).zip(y) {
                         *o += inv_std * (gi - mean_g - yi * mean_gy);
+                    }
+                }
+            }
+            Self::MatmulMany => {
+                let (x, weights) = (&node.parents()[0], &node.parents()[1..]);
+                let (m, k, n) = (x.shape()[0], x.shape()[1], weights[0].shape()[1]);
+                if m == 0 || k == 0 || n == 0 {
+                    return Ok(());
+                }
+                if let Some((store, _)) = weights[0].residency() {
+                    // O forward garante: todos residentes no mesmo store.
+                    let views: Vec<crate::View> = weights
+                        .iter()
+                        .map(|w| w.residency().expect("resident weights").1)
+                        .collect();
+                    let dx = store.matmul_many_backward(x.data(), &views, g, m, k, n)?;
+                    if dx.len() != m * k {
+                        return Err(TensorError::InvalidShape(
+                            "store returned wrong gradient size",
+                        ));
+                    }
+                    give(pending, x, dx);
+                    return Ok(());
+                }
+                let backend = node.0.backend.as_ref().expect("matmul_many backend");
+                // dx = Σᵢ gᵢ·Wᵢᵀ, somado na ordem dos pesos (a mesma do store residente).
+                let mut dx = zeros_buffer(m * k)?;
+                for (i, w) in weights.iter().enumerate() {
+                    let gi = crate::resident::columns_of(g, m, n, weights.len(), i);
+                    let (dxi, dwi) = backend.matmul_backward(x.data(), w.data(), &gi, m, k, n)?;
+                    if dxi.len() != m * k || dwi.len() != k * n {
+                        return Err(TensorError::InvalidShape(
+                            "backend returned wrong gradient size",
+                        ));
+                    }
+                    give(pending, w, dwi);
+                    for (out, value) in dx.iter_mut().zip(dxi) {
+                        *out += value;
+                    }
+                }
+                give(pending, x, dx);
+            }
+            Self::Columns => {
+                let parent = &node.parents()[0];
+                let (start, width) = (node.0.indices[0], node.0.indices[1]);
+                let (rows, total) = (parent.shape()[0], parent.shape()[1]);
+                let target = adjoint(pending, parent)?;
+                for row in 0..rows {
+                    let span = row * total + start..row * total + start + width;
+                    for (out, value) in target[span]
+                        .iter_mut()
+                        .zip(&g[row * width..(row + 1) * width])
+                    {
+                        *out += value;
                     }
                 }
             }
@@ -982,6 +1123,17 @@ impl Op {
                     1
                 };
                 if m == 0 || k == 0 || n == 0 {
+                    return Ok(());
+                }
+                if let Some((store, view)) = b.residency() {
+                    // O forward só aceita residente em matmul 2D: batch == 1.
+                    let da = store.matmul_backward(a.data(), view, g, m, k, n)?;
+                    if da.len() != m * k {
+                        return Err(TensorError::InvalidShape(
+                            "store returned wrong gradient size",
+                        ));
+                    }
+                    give(pending, a, da);
                     return Ok(());
                 }
                 let backend = node.0.backend.as_ref().expect("matmul backend");

@@ -139,6 +139,25 @@ impl KatsuLmConfig {
         2 + self.layers * self.per_layer() + 3
     }
 
+    /// Índices dos parâmetros que só aparecem como lado direito de matmul (Q, K, V e Wo de
+    /// cada cabeça, as duas camadas do MLP e a cabeça de saída), na ordem da arena residente:
+    /// os Wo de uma camada ficam vizinhos, para o concat das cabeças virar uma faixa só.
+    /// Embeddings, LayerNorm e bias ficam fora: são usados por operações que rodam no host.
+    pub fn resident_layout(&self) -> Vec<usize> {
+        let mut layout = Vec::new();
+        for layer in 0..self.layers {
+            let base = 2 + layer * self.per_layer() + HEAD_START;
+            for head in 0..self.heads {
+                layout.extend((0..3).map(|i| base + head * PER_HEAD + i));
+            }
+            layout.extend((0..self.heads).map(|head| base + head * PER_HEAD + 3));
+            let mlp = base + self.heads * PER_HEAD;
+            layout.extend([mlp + 2, mlp + 4]);
+        }
+        layout.push(self.param_tensors() - 1);
+        layout
+    }
+
     /// Total de números treináveis.
     pub fn param_count(&self) -> usize {
         let (v, t, d) = (self.vocab_size, self.block_size, self.embed_dim);
@@ -260,10 +279,16 @@ impl KatsuLmConfig {
             // sem guardar uma saída [B·T, d] e uma soma residual por cabeça.
             let mut heads = Vec::with_capacity(self.heads);
             let mut out_weights = Vec::with_capacity(self.heads);
-            for w in p[HEAD_START..HEAD_START + self.heads * PER_HEAD].chunks_exact(PER_HEAD) {
-                let q = mm(&h, &w[0])?.reshape(&[batch, t, dh])?;
-                let k = mm(&h, &w[1])?.reshape(&[batch, t, dh])?;
-                let v = mm(&h, &w[2])?.reshape(&[batch, t, dh])?;
+            let per_head = p[HEAD_START..HEAD_START + self.heads * PER_HEAD].chunks_exact(PER_HEAD);
+            // Q, K e V de todas as cabeças numa chamada: a entrada h sobe uma vez só.
+            let projections: Vec<Tensor> = per_head.clone().flat_map(|w| w[..3].to_vec()).collect();
+            let qkv = h.matmul_many_with_backend(&projections, backend.clone())?;
+            for (head, w) in per_head.enumerate() {
+                let part = |j: usize| {
+                    qkv.columns((3 * head + j) * dh, dh)?
+                        .reshape(&[batch, t, dh])
+                };
+                let (q, k, v) = (part(0)?, part(1)?, part(2)?);
                 let attention = q.causal_attention_with_backend(&k, backend.clone())?;
                 heads.push(
                     attention

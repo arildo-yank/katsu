@@ -1,5 +1,8 @@
 #![cfg(feature = "cuda")]
-use katsu_core::{Adam, Backend, CpuBackend, CudaBackend, KatsuLmConfig, Optimizer, Tensor};
+use katsu_core::{
+    arena_len, materialize, upload, Adam, Backend, CpuBackend, CudaBackend, HostParamStore,
+    KatsuLmConfig, Optimizer, ParamStore, Tensor,
+};
 use std::sync::Arc;
 fn close(a: &[f32], b: &[f32], atol: f32, rtol: f32) -> f32 {
     assert_eq!(a.len(), b.len());
@@ -109,6 +112,67 @@ fn cuda_ten_steps_match_cpu_gradients_and_weights() -> Result<(), Box<dyn std::e
         println!("{{\"step\":{},\"loss_cpu\":{},\"loss_cuda\":{},\"max_abs_gradient_error\":{},\"max_abs_weight_error\":{}}}",step+1,c.data()[0],g.data()[0],max_grad,max_weight);
     }
     assert!(gpu.kernel_launches() > 100);
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires NVIDIA; weights, gradients and Adam resident in VRAM against the host reference"]
+fn cuda_resident_store_matches_host_reference() -> Result<(), Box<dyn std::error::Error>> {
+    let cfg = KatsuLmConfig {
+        vocab_size: 512,
+        block_size: 16,
+        embed_dim: 64,
+        layers: 2,
+        heads: 4,
+    };
+    let cpu: Arc<dyn Backend> = Arc::new(CpuBackend::default());
+    let gpu = CudaBackend::new(0)?;
+    let layout = cfg.resident_layout();
+    let init = cfg.init(3)?;
+    let len = arena_len(&init, &layout)?;
+    let host_store = Arc::new(HostParamStore::new(len, cpu.clone())?);
+    let cuda_store = Arc::new(gpu.param_store(len)?);
+    let copy = |p: &[Tensor]| -> Vec<Tensor> {
+        p.iter()
+            .map(|t| Tensor::new(t.data().to_vec(), t.shape()).unwrap())
+            .collect()
+    };
+    let mut host = upload(copy(&init), &layout, host_store.clone())?;
+    let mut cuda = upload(copy(&init), &layout, cuda_store.clone())?;
+    let weight_bytes = 4 * len as u64;
+    assert_eq!(cuda_store.transfers().to_device, weight_bytes);
+    let (mut ho, mut co) = (Adam::new(1e-3)?, Adam::new(1e-3)?);
+    for step in 0..5 {
+        let w1: Vec<_> = (0..12).map(|i| (i * 29 + step * 7) % 512).collect();
+        let w2: Vec<_> = (0..12).map(|i| (i * 47 + step * 11) % 512).collect();
+        let windows = [w1.as_slice(), w2.as_slice()];
+        let before = cuda_store.transfers();
+        let h = cfg.loss_batch_with_backend(&host, &windows, cpu.clone())?;
+        let c = cfg.loss_batch_with_backend(&cuda, &windows, cpu.clone())?;
+        close(c.data(), h.data(), 3e-4, 3e-4);
+        let (loss_host, loss_cuda) = (h.data()[0], c.data()[0]);
+        h.backward_release()?;
+        c.backward_release()?;
+        let (hs, hb) = host_store.grad_stats()?;
+        let (cs, cb) = cuda_store.grad_stats()?;
+        assert_eq!((hb, cb), (0, 0));
+        assert!((hs - cs).abs() <= 1e-3 * hs.max(1e-12), "{hs} vs {cs}");
+        host = ho.step_resident(host, host_store.as_ref())?.0;
+        let (next, bad) = co.step_resident(cuda, cuda_store.as_ref())?;
+        assert_eq!(bad, 0);
+        cuda = next;
+        let after = cuda_store.transfers();
+        let moved = after.to_device - before.to_device + after.to_host - before.to_host;
+        assert!(
+            moved < weight_bytes,
+            "step {step}: {moved} bytes vs weights {weight_bytes}"
+        );
+        let mut max_weight = 0.0f32;
+        for (a, b) in materialize(&cuda)?.iter().zip(materialize(&host)?.iter()) {
+            max_weight = max_weight.max(close(a.data(), b.data(), 5e-4, 5e-3));
+        }
+        println!("{{\"step\":{},\"loss_host\":{},\"loss_cuda\":{},\"bytes_moved\":{moved},\"max_abs_weight_error\":{max_weight}}}", step + 1, loss_host, loss_cuda);
+    }
     Ok(())
 }
 
