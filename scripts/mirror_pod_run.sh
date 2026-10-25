@@ -17,7 +17,10 @@ ssh_() { ssh -i "${SSH_KEY:-$HOME/.ssh/arandu_gpu}" -p "$port" -o BatchMode=yes 
 pointed=0
 while true; do
   for f in metrics.jsonl config.json launch.json sft-report.json system_telemetry.json; do
-    if ssh_ "cat '$remote/$f' 2>/dev/null" > "$local/$f.tmp" && [[ -s "$local/$f.tmp" ]]; then
+    # só substitui quando o conteúdo mudou: a data do arquivo local é o que o painel usa para
+    # dizer que o treino parou; regravar a mesma cópia escondia um processo morto
+    if ssh_ "cat '$remote/$f' 2>/dev/null" > "$local/$f.tmp" && [[ -s "$local/$f.tmp" ]] \
+        && ! cmp -s "$local/$f.tmp" "$local/$f"; then
       mv "$local/$f.tmp" "$local/$f"
     else
       rm -f "$local/$f.tmp"

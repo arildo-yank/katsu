@@ -3,6 +3,11 @@
 #
 #   EPOCHS=3 BATCH=16 LR=0.0003 MAX_HOURS=6 ./deploy/cuda/runpod_train.sh
 #
+# Prova de conceito (10k exemplos, gerados com scripts/sample_sft_subset.py), como rodou em 2026-10-26:
+#   DATA=data/sft/distill_arandu_10k EPOCHS=1 BATCH=16 MAX_HOURS=3 OUTPUT=runs/poc-10k-b16 ./deploy/cuda/runpod_train.sh
+# São 625 passos × 12,2 s ≈ 2 h 07 min, mais ~10 min medindo a loss em 3 × EVAL_SAMPLES antes do
+# passo 1 e ~6 min depois do último. MAX_HOURS=2 cortaria perto do passo 540, sem sft-report.json.
+#
 # Antes, suba para o pod (scp), dentro desta pasta:
 #   data/sft/distill_arandu_50k.train.jsonl e .eval.jsonl
 #   runs/hostinger-sft-134m-20261025/{model.ckpt,config.json,tokenizer.bpe}
