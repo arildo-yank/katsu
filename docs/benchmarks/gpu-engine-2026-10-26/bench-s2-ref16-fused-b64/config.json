@@ -1,0 +1,43 @@
+{
+  "adam_state_resumed": false,
+  "adapt_steps": 0,
+  "backend": "cuda",
+  "base_checkpoint": "runs/base",
+  "batch_size": 64,
+  "benchmark_only": true,
+  "block_size": 256,
+  "checkpoint_contents": "weights + Adam moments/step + RNG + phase/step + data/schedule signature",
+  "checkpoint_every": 100,
+  "corpus_learning_rate": 0.00009999999747378752,
+  "corpus_phase": "adapt",
+  "corpus_tokens": 0,
+  "embed_dim": 768,
+  "engine": "gpu",
+  "eval_samples": 25,
+  "format": "Katsu-native-rust-sft-v1",
+  "gpu_options": "GpuTrainOptions { gemm: Reference16, fused: true }",
+  "heads": 12,
+  "layers": 12,
+  "learning_rate": 0.0003000000142492354,
+  "loss_mask": "assistant-only",
+  "markers": "KATSUBP2 reserved instruction IDs",
+  "parameters": 134367744,
+  "phase": "sft",
+  "random_initialization": false,
+  "rest_backend": "cuda (all ops on device)",
+  "scheduler": {
+    "min_lr_ratio": 0.1,
+    "type": "linear-warmup-cosine",
+    "warmup_ratio": 0.05
+  },
+  "special_token_ids": {
+    "<|assistant|>": 31998,
+    "<|end|>": 31999,
+    "<|system|>": 31996,
+    "<|user|>": 31997
+  },
+  "steps": 15,
+  "train_sequence_length": 256,
+  "vocab_size": 32000,
+  "vram_used_after_alloc_mib": 19378
+}
