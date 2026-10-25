@@ -41,3 +41,11 @@ pub use lm::{
 
 mod bpe;
 pub use bpe::{BpeTokenizer, INSTRUCTION_TOKENS};
+
+mod gpu_layout;
+pub use gpu_layout::{GpuLayout, LayerSlots, SftBatch, Slot};
+#[cfg(feature = "cuda")]
+#[allow(unsafe_code)]
+mod gpu_train;
+#[cfg(feature = "cuda")]
+pub use gpu_train::{GemmKernel, GpuTrainOptions, GpuTrainer};

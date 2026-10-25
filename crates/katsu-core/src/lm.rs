@@ -165,6 +165,29 @@ impl KatsuLmConfig {
         v * d + t * d + self.layers * layer + 2 * d + d * v
     }
 
+    /// Shapes de `params`, na ordem de `init`, sem alocar os pesos.
+    pub fn init_shapes(&self) -> Vec<Vec<usize>> {
+        let (v, t, d) = (self.vocab_size, self.block_size, self.embed_dim);
+        let dh = d / self.heads.max(1);
+        let mut shapes = vec![vec![v, d], vec![t, d]];
+        for _ in 0..self.layers {
+            shapes.extend([vec![d], vec![d]]);
+            for _ in 0..self.heads {
+                shapes.extend([vec![d, dh], vec![d, dh], vec![d, dh], vec![dh, d]]);
+            }
+            shapes.extend([
+                vec![d],
+                vec![d],
+                vec![d, 4 * d],
+                vec![4 * d],
+                vec![4 * d, d],
+                vec![d],
+            ]);
+        }
+        shapes.extend([vec![d], vec![d], vec![d, v]]);
+        shapes
+    }
+
     /// Inicialização reproduzível no estilo GPT-2: pesos ~ U(-a, a) com desvio 0.02,
     /// projeções de saída escaladas por 1/√(2·camadas), LayerNorm com γ=1 e β=0.
     pub fn init(&self, seed: u64) -> Result<Vec<Tensor>> {

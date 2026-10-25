@@ -430,6 +430,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         serde_json::to_vec_pretty(&metadata)?,
     )?;
     save(&params, &output.join("migrated.ckpt"))?;
+    // KATSU_ENGINE=gpu: forward, backward e Adam inteiros na GPU (katsu_core::GpuTrainer),
+    // mesmas fases, métricas, checkpoints e relatório do caminho abaixo.
+    if std::env::var("KATSU_ENGINE").as_deref() == Ok("gpu") {
+        #[cfg(feature = "cuda")]
+        return gpu::run(gpu::Run {
+            c,
+            params,
+            resume_adam,
+            resume_phase,
+            resume_step,
+            resume_rng,
+            train: &train,
+            eval: &eval,
+            corpus: &corpus,
+            steps,
+            adapt,
+            learning_rate,
+            corpus_lr,
+            warmup_ratio,
+            min_lr_ratio,
+            eval_samples,
+            checkpoint_every,
+            benchmark_only,
+            signature: &signature,
+            batch,
+            fresh,
+            output,
+            metadata,
+            wall_started,
+        });
+        #[cfg(not(feature = "cuda"))]
+        return Err("KATSU_ENGINE=gpu requires --features cuda".into());
+    }
     // KATSU_RESIDENT=1: pesos de matmul, gradientes e Adam ficam no store (na VRAM com
     // KATSU_BACKEND=cuda); as demais operações rodam no host, sem cópia
     // (KATSU_RESIDENT_REST=device as mantém no backend escolhido).
@@ -604,6 +637,230 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     eprintln!("{report}");
     Ok(())
+}
+
+#[cfg(feature = "cuda")]
+mod gpu {
+    use super::*;
+    use katsu_core::{GemmKernel, GpuTrainOptions, GpuTrainer, SftBatch};
+
+    pub(super) struct Run<'a> {
+        pub c: KatsuLmConfig,
+        pub params: Vec<Tensor>,
+        pub resume_adam: Option<Adam>,
+        pub resume_phase: String,
+        pub resume_step: usize,
+        pub resume_rng: u64,
+        pub train: &'a [Example],
+        pub eval: &'a [Example],
+        pub corpus: &'a [usize],
+        pub steps: usize,
+        pub adapt: usize,
+        pub learning_rate: f32,
+        pub corpus_lr: f32,
+        pub warmup_ratio: f64,
+        pub min_lr_ratio: f64,
+        pub eval_samples: usize,
+        pub checkpoint_every: usize,
+        pub benchmark_only: bool,
+        pub signature: &'a Value,
+        pub batch: usize,
+        pub fresh: bool,
+        pub output: &'a Path,
+        pub metadata: Value,
+        pub wall_started: std::time::Instant,
+    }
+
+    fn one(e: &Example) -> Result<SftBatch, katsu_core::TensorError> {
+        SftBatch::new(&[(&e.ids, e.answer_start)])
+    }
+
+    /// Média da perda por exemplo, um forward por exemplo como o `measure` do host.
+    fn measure(t: &mut GpuTrainer, data: &[Example]) -> Result<f64, Box<dyn std::error::Error>> {
+        let mut total = 0.;
+        for e in data {
+            total += t.loss(&one(e)?)?;
+        }
+        Ok(total / data.len() as f64)
+    }
+
+    /// Passo do Adam com as mesmas recusas do `update` do host; devolve a norma.
+    fn step(t: &mut GpuTrainer, loss: f64) -> Result<f64, Box<dyn std::error::Error>> {
+        if !loss.is_finite() {
+            return Err("nonfinite loss".into());
+        }
+        let (norm, nonfinite) = t.grad_stats()?;
+        if nonfinite > 0 {
+            return Err("nonfinite gradient".into());
+        }
+        if t.adam_step()? > 0 {
+            return Err("nonfinite weights".into());
+        }
+        Ok(norm)
+    }
+
+    fn save_checkpoint(
+        t: &GpuTrainer,
+        state: &Value,
+        path: &Path,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        checkpoint(&t.params()?, &t.adam()?, state, path)
+    }
+
+    pub(super) fn run(mut r: Run) -> Result<(), Box<dyn std::error::Error>> {
+        let gemm = match std::env::var("KATSU_GEMM").as_deref() {
+            Err(_) | Ok("reference16") => GemmKernel::Reference16,
+            _ => return Err("KATSU_GEMM must be reference16".into()),
+        };
+        let options = GpuTrainOptions { gemm };
+        let pretrain_adam = if r.resume_phase == "pretrain" {
+            r.resume_adam.take().ok_or("resume Adam")?
+        } else {
+            Adam::new(r.corpus_lr)?
+        };
+        let mut t = GpuTrainer::new(
+            r.c,
+            &r.params,
+            &pretrain_adam,
+            r.batch,
+            r.c.block_size,
+            0,
+            options,
+        )?;
+        drop(std::mem::take(&mut r.params));
+        let (free, total) = t.memory()?;
+        r.metadata["engine"] = json!("gpu");
+        r.metadata["gpu_options"] = json!(format!("{options:?}"));
+        r.metadata["vram_used_after_alloc_mib"] = json!((total - free) / (1 << 20));
+        r.metadata["rest_backend"] = json!("cuda (all ops on device)");
+        fs::write(
+            r.output.join("config.json"),
+            serde_json::to_vec_pretty(&r.metadata)?,
+        )?;
+
+        let mut log = BufWriter::new(File::create(r.output.join("metrics.jsonl"))?);
+        let mut rng = SplitMix64(r.resume_rng);
+        let train_sample = &r.train[..r.train.len().min(r.eval_samples)];
+        let eval_sample = &r.eval[..r.eval.len().min(r.eval_samples)];
+        let before = if r.benchmark_only {
+            None
+        } else {
+            Some(measure(&mut t, eval_sample)?)
+        };
+        let pretrain_start = if r.resume_phase == "sft" {
+            r.adapt
+        } else {
+            r.resume_step
+        };
+        for s in pretrain_start + 1..=r.adapt {
+            let started = std::time::Instant::now();
+            let lr = scheduled_lr(r.corpus_lr, s, r.adapt, r.warmup_ratio, r.min_lr_ratio);
+            t.set_learning_rate(lr)?;
+            let i = rng.below(r.corpus.len() - 256);
+            let loss = t.loss_and_grad(&SftBatch::windows(&[&r.corpus[i..i + 257]])?)?;
+            let norm = step(&mut t, loss)?;
+            if s % r.checkpoint_every == 0 {
+                save_checkpoint(
+                    &t,
+                    &json!({"signature":r.signature,"phase":"pretrain","step":s,"rng":rng.0}),
+                    &r.output.join("latest.ckpt"),
+                )?;
+            }
+            writeln!(
+                log,
+                "{}",
+                json!({"phase":if r.fresh {"pretrain"} else {"adapt"},"step":s,"epoch":s,"learning_rate":lr,"loss":loss,"grad_l2":norm,"step_seconds":started.elapsed().as_secs_f64(),"input_tokens":256,"target_tokens":256,"transfer_bytes":null})
+            )?;
+            log.flush()?;
+        }
+        save(&t.params()?, &r.output.join("adapted.ckpt"))?;
+        if r.resume_phase != "sft" && r.adapt > 0 {
+            save_checkpoint(
+                &t,
+                &json!({"signature":r.signature,"phase":"pretrain","step":r.adapt,"rng":rng.0}),
+                &r.output.join("pretrain-final.ckpt"),
+            )?;
+        }
+        let initial_train = if r.benchmark_only {
+            None
+        } else {
+            Some(measure(&mut t, train_sample)?)
+        };
+        let initial_eval = if r.benchmark_only {
+            None
+        } else {
+            Some(measure(&mut t, eval_sample)?)
+        };
+        let sft_adam = if r.resume_phase == "sft" {
+            r.resume_adam.take().ok_or("resume Adam")?
+        } else {
+            Adam::new(r.learning_rate)?
+        };
+        t.load_adam(&sft_adam)?;
+        let started = std::time::Instant::now();
+        let sft_start = if r.resume_phase == "sft" {
+            r.resume_step
+        } else {
+            0
+        };
+        for s in sft_start + 1..=r.steps {
+            let step_started = std::time::Instant::now();
+            let lr = scheduled_lr(r.learning_rate, s, r.steps, r.warmup_ratio, r.min_lr_ratio);
+            t.set_learning_rate(lr)?;
+            let examples: Vec<&Example> = (0..r.batch)
+                .map(|_| &r.train[rng.below(r.train.len())])
+                .collect();
+            let pairs: Vec<(&[usize], usize)> = examples
+                .iter()
+                .map(|e| (e.ids.as_slice(), e.answer_start))
+                .collect();
+            let batch = SftBatch::new(&pairs)?;
+            let loss = t.loss_and_grad(&batch)?;
+            let norm = step(&mut t, loss)?;
+            if s % r.checkpoint_every == 0 {
+                save_checkpoint(
+                    &t,
+                    &json!({"signature":r.signature,"phase":"sft","step":s,"rng":rng.0}),
+                    &r.output.join("latest.ckpt"),
+                )?;
+            }
+            writeln!(
+                log,
+                "{}",
+                json!({"phase":"sft","step":s,"epoch":r.adapt+s,"learning_rate":lr,"loss":loss,"grad_l2":norm,"elapsed_seconds":started.elapsed().as_secs_f64(),"step_seconds":step_started.elapsed().as_secs_f64(),"batch":r.batch,"input_tokens":batch.input_tokens,"padded_tokens":batch.batch*batch.width,"target_tokens":examples.iter().map(|e|e.ids.len()-e.answer_start).sum::<usize>(),"transfer_bytes":null})
+            )?;
+            log.flush()?;
+            if s % 100 == 0 {
+                eprintln!("SFT step={s} loss={loss:.4} grad_l2={norm:.4}");
+            }
+        }
+        if r.steps > 0 {
+            save_checkpoint(
+                &t,
+                &json!({"signature":r.signature,"phase":"sft","step":r.steps,"rng":rng.0}),
+                &r.output.join("training-final.ckpt"),
+            )?;
+        }
+        let final_train = if r.benchmark_only {
+            None
+        } else {
+            Some(measure(&mut t, train_sample)?)
+        };
+        let final_eval = if r.benchmark_only {
+            None
+        } else {
+            Some(measure(&mut t, eval_sample)?)
+        };
+        save(&t.params()?, &r.output.join("model.ckpt"))?;
+        let (free, total) = t.memory()?;
+        let report = json!({"steps":r.steps,"adapt_steps":r.adapt,"learning_rate":r.learning_rate,"train_measured_examples":train_sample.len(),"eval_measured_examples":eval_sample.len(),"train_examples":r.train.len(),"heldout_examples":r.eval.len(),"max_train_tokens":r.train.iter().map(|e|e.ids.len()).max(),"base_eval_loss":before,"initial_train_loss":initial_train,"final_train_loss":final_train,"initial_eval_loss":initial_eval,"final_eval_loss":final_eval,"elapsed_sft_seconds":started.elapsed().as_secs_f64(),"finite_checks_passed":true,"benchmark_only":r.benchmark_only,"corpus_tokens":r.corpus.len(),"wall_seconds":r.wall_started.elapsed().as_secs_f64(),"engine":"gpu","vram_used_mib":(total-free)/(1<<20),"vram_total_mib":total/(1<<20),"kernel_launches":t.kernel_launches()});
+        fs::write(
+            r.output.join("sft-report.json"),
+            serde_json::to_vec_pretty(&report)?,
+        )?;
+        eprintln!("{report}");
+        Ok(())
+    }
 }
 
 #[cfg(test)]

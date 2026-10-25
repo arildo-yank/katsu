@@ -178,6 +178,38 @@ impl Adam {
         }
         Ok(opt)
     }
+    /// Hiperparâmetros e contador de passos: (lr, beta1, beta2, eps, step).
+    pub fn hyperparameters(&self) -> (f32, f32, f32, f32, i32) {
+        (
+            self.learning_rate,
+            self.beta1,
+            self.beta2,
+            self.eps,
+            self.step,
+        )
+    }
+
+    /// Momentos (m, v) por parâmetro, na ordem dos parâmetros; vazio antes do primeiro passo.
+    pub fn moments(&self) -> &[(Vec<f32>, Vec<f32>)] {
+        &self.moments
+    }
+
+    /// Estado completo vindo de outro executor (ex.: o treino inteiro na GPU), no mesmo
+    /// formato que `save_state` grava.
+    pub fn from_state(
+        hyperparameters: (f32, f32, f32, f32, i32),
+        moments: Vec<(Vec<f32>, Vec<f32>)>,
+    ) -> Result<Self> {
+        let (learning_rate, beta1, beta2, eps, step) = hyperparameters;
+        let mut opt = Self::with_betas(learning_rate, beta1, beta2, eps)?;
+        if step < 0 || moments.iter().any(|(m, v)| m.len() != v.len()) {
+            return Err(TensorError::OptimizerState);
+        }
+        opt.step = step;
+        opt.moments = moments;
+        Ok(opt)
+    }
+
     /// Padrões usuais: beta1 = 0.9, beta2 = 0.999, eps = 1e-8.
     pub fn new(learning_rate: f32) -> Result<Self> {
         Self::with_betas(learning_rate, 0.9, 0.999, 1e-8)
