@@ -6,6 +6,8 @@
 //! acumulado entre passos, então zero_grad não é necessário.
 use std::fmt;
 
+use rayon::prelude::*;
+
 use crate::{Tensor, TensorError};
 
 type Result<T> = std::result::Result<T, TensorError>;
@@ -195,7 +197,21 @@ impl Adam {
 impl Optimizer for Adam {
     /// Valida tudo antes de alterar o estado: um erro não consome um passo.
     fn step(&mut self, params: &[Tensor]) -> Result<Vec<Tensor>> {
-        let grads = gradients(params)?;
+        // Lê os gradientes sem copiar; os guards ficam abertos só durante o passo.
+        let mut guards = Vec::new();
+        guards.try_reserve_exact(params.len())?;
+        for param in params {
+            guards.push(param.grad()?);
+        }
+        let mut grads = Vec::new();
+        grads.try_reserve_exact(params.len())?;
+        for (index, guard) in guards.iter().enumerate() {
+            grads.push(
+                guard
+                    .as_deref()
+                    .ok_or(TensorError::MissingGradient { index })?,
+            );
+        }
         if self.moments.is_empty() {
             for param in params {
                 self.moments
@@ -210,21 +226,47 @@ impl Optimizer for Adam {
         {
             return Err(TensorError::OptimizerState);
         }
+        let mut buffers = Vec::new();
+        buffers.try_reserve_exact(params.len())?;
+        for param in params {
+            let mut data = Vec::new();
+            data.try_reserve_exact(param.numel())?;
+            data.resize(param.numel(), 0.0);
+            buffers.push(data);
+        }
         self.step = self.step.saturating_add(1);
         let correction1 = 1.0 - self.beta1.powi(self.step);
         let correction2 = 1.0 - self.beta2.powi(self.step);
+        let (beta1, beta2, lr, eps) = (self.beta1, self.beta2, self.learning_rate, self.eps);
+        // Cada elemento é independente: dividir em blocos entre threads não muda o resultado.
+        const CHUNK: usize = 1 << 14;
+        for (((param, grad), (m, v)), data) in params
+            .iter()
+            .zip(&grads)
+            .zip(&mut self.moments)
+            .zip(&mut buffers)
+        {
+            data.par_chunks_mut(CHUNK)
+                .zip(param.data().par_chunks(CHUNK))
+                .zip(grad.par_chunks(CHUNK))
+                .zip(m.par_chunks_mut(CHUNK).zip(v.par_chunks_mut(CHUNK)))
+                .for_each(|(((out, values), grad), (m, v))| {
+                    for ((((out, &value), &g), m), v) in
+                        out.iter_mut().zip(values).zip(grad).zip(m).zip(v)
+                    {
+                        *m = beta1 * *m + (1.0 - beta1) * g;
+                        *v = beta2 * *v + (1.0 - beta2) * g * g;
+                        let m_hat = *m / correction1;
+                        let v_hat = *v / correction2;
+                        *out = value - lr * m_hat / (v_hat.sqrt() + eps);
+                    }
+                });
+        }
+        drop(grads);
+        drop(guards);
         let mut updated = Vec::new();
         updated.try_reserve_exact(params.len())?;
-        for ((param, grad), (m, v)) in params.iter().zip(&grads).zip(&mut self.moments) {
-            let mut data = Vec::new();
-            data.try_reserve_exact(param.numel())?;
-            for (((&value, &g), m), v) in param.data().iter().zip(grad).zip(m).zip(v) {
-                *m = self.beta1 * *m + (1.0 - self.beta1) * g;
-                *v = self.beta2 * *v + (1.0 - self.beta2) * g * g;
-                let m_hat = *m / correction1;
-                let v_hat = *v / correction2;
-                data.push(value - self.learning_rate * m_hat / (v_hat.sqrt() + self.eps));
-            }
+        for (param, data) in params.iter().zip(buffers) {
             updated.push(Tensor::new(data, param.shape())?);
         }
         Ok(updated)

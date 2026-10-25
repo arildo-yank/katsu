@@ -188,17 +188,9 @@ impl Backend for CpuBackend {
         }
         let kernel = Kernel::detect(self.simd);
         let row_a = |(i, out): (usize, &mut [f32])| {
+            let g_row = &g[i * n..(i + 1) * n];
             for (p, result) in out.iter_mut().enumerate() {
-                // Oito acumuladores independentes preservam uma ordem fixa por linha.
-                let mut lanes = [0.0f32; 8];
-                for (j, (&x, &y)) in g[i * n..(i + 1) * n]
-                    .iter()
-                    .zip(&b[p * n..(p + 1) * n])
-                    .enumerate()
-                {
-                    lanes[j % 8] += x * y;
-                }
-                *result = lanes.iter().sum();
+                *result = kernel.dot(g_row, &b[p * n..(p + 1) * n]);
             }
         };
         let row_b = |(p, out): (usize, &mut [f32])| {
