@@ -5,6 +5,8 @@ chaves, perguntas e valores próprios: nenhum caso do benchmark entra no treino 
 
   python3 scripts/build_context_sft.py --count 12000 --out data/sft/context_arandu
 
+v2: valores copiados literalmente e nomes de campo gerados ao acaso (ver generic_field).
+
 Saída: <out>.train.jsonl, <out>.eval.jsonl (5%) e <out>.manifest.json. Sintético, determinístico
 (semente fixa), sem API externa: a licença é a deste repositório.
 """
@@ -28,11 +30,9 @@ REFUSE = [
 
 
 def br(x, digits=2):
-    """Número no formato brasileiro (vírgula decimal, ponto de milhar)."""
-    if isinstance(x, int):
-        return f"{x:,}".replace(",", ".")
-    text = f"{x:,.{digits}f}"
-    return text.replace(",", "X").replace(".", ",").replace("X", ".")
+    """Valor exatamente como aparece no JSON do contexto (3790, 12.5): o modelo aprende a copiar, não a
+    reformatar. A v1 escrevia 3.790 e 12,5, e o modelo não copiava números de campos novos."""
+    return json.dumps(x, ensure_ascii=False) if not isinstance(x, str) else x
 
 
 # Cada campo: chave no JSON, gerador do valor, texto do valor para a resposta, pergunta(s), frase.
@@ -191,6 +191,8 @@ def no_data(r, what):
 
 
 def example(r, kind):
+    if kind.endswith("_generic"):
+        return generic_example(r, kind)
     domain = r.choice(list(DOMAINS))
     if kind == "copy":
         chosen, ctx = sample_fields(r, domain, r.randint(1, 4))
@@ -237,7 +239,77 @@ def example(r, kind):
     raise ValueError(kind)
 
 
-MIX = [("copy", 0.32), ("summary", 0.1), ("missing", 0.22), ("judgment", 0.1), ("pii", 0.14), ("injection", 0.12)]
+# Campos genéricos: nome = grandeza + objeto + unidade, combinados ao acaso (centenas de nomes que o
+# modelo nunca viu), para ensinar a copiar o valor de qualquer campo, não a frase de um campo conhecido.
+MEASURES = [("total", "o total de"), ("qtd", "a quantidade de"), ("numero", "o número de"), ("media", "a média de"),
+            ("maximo", "o máximo de"), ("minimo", "o mínimo de"), ("contagem", "a contagem de"), ("saldo", "o saldo de")]
+OBJECTS = ["acessos", "visitas", "pacotes", "arquivos", "chamadas", "tarefas", "caixas", "leituras", "viagens", "lotes",
+           "clientes", "pedidos", "paginas", "mensagens", "consultas", "entregas", "amostras", "reservas", "turnos", "alertas"]
+TIME = [("s", "segundos"), ("min", "minutos"), ("h", "horas"), ("dias", "dias")]
+LENGTH = [("m", "metros"), ("km", "km"), ("cm", "cm"), ("mm", "mm")]
+# cada grandeza só com as unidades que fazem sentido para ela
+QUANTITIES = [("tempo", "o tempo", TIME), ("duracao", "a duração", TIME), ("espera", "a espera", TIME),
+              ("distancia", "a distância", LENGTH), ("altura", "a altura", LENGTH), ("largura", "a largura", LENGTH),
+              ("comprimento", "o comprimento", LENGTH), ("peso", "o peso", [("kg", "kg"), ("g", "gramas")]),
+              ("volume", "o volume", [("l", "litros"), ("ml", "ml")]), ("velocidade", "a velocidade", [("kmh", "km/h")]),
+              ("custo", "o custo", [("reais", "reais")]), ("consumo", "o consumo", [("kwh", "kWh"), ("l", "litros")]),
+              ("ocupacao", "a ocupação", [("pct", "%")]), ("tamanho", "o tamanho", [("mb", "MB"), ("gb", "GB")])]
+RESULTS = [("resultado_votacao", "o resultado da votação"), ("resultado_final", "o resultado final"),
+           ("contagem_votos", "a contagem de votos"), ("resultado_partida_xadrez", "o resultado da partida de xadrez")]
+
+
+def generic_field(r):
+    """(chave, rótulo da pergunta, valor, unidade da resposta)."""
+    if r.random() < 0.45:
+        (m, label), obj = r.choice(MEASURES), r.choice(OBJECTS)
+        value = r.randint(0, 99999) if m != "media" else round(r.uniform(0, 999), r.choice([1, 2]))
+        return f"{m}_{obj}", f"{label} {obj}", value, ""
+    if r.random() < 0.1:  # resultado em texto ("3 a 2"), copiado tal como está
+        key, label = r.choice(RESULTS)
+        return key, label, f"{r.randint(0, 9)} a {r.randint(0, 9)}", ""
+    q, label, units = r.choice(QUANTITIES)
+    u, unit = r.choice(units)
+    value = r.randint(0, 9999) if r.random() < 0.6 else round(r.uniform(0, 999), r.choice([1, 2]))
+    return f"{q}_{u}", label, value, unit
+
+
+def generic(r, n):
+    fields, ctx = [], {}
+    while len(fields) < n:
+        key, label, value, unit = generic_field(r)
+        if key not in ctx:
+            ctx[key] = value
+            fields.append((key, label, value, unit))
+    return fields, ctx
+
+
+def literal(value, unit):
+    text = value if isinstance(value, str) else json.dumps(value)
+    return f"{text} {unit}".strip() if unit != "%" else f"{text}%"
+
+
+def generic_example(r, kind):
+    fields, ctx = generic(r, r.randint(1, 4))
+    if kind == "copy_generic":
+        key, label, value, unit = r.choice(fields)
+        q = r.choice([f"Qual é {label}?", f"Qual o valor registrado de {label}?", f"Quanto foi registrado em {key}?",
+                      f"Qual o valor de {key}?", f"O que o contexto informa sobre {label}?"])
+        if unit in ("minutos", "segundos", "horas", "dias") and r.random() < 0.5:
+            q = f"Quantos {unit} foram registrados em {key}?"
+        return ctx, q, r.choice([f"{label[0].upper() + label[1:]}: {literal(value, unit)}.",
+                                 f"O contexto informa {literal(value, unit)} em {key}.",
+                                 f"Foi registrado {literal(value, unit)} ({key})."])
+    if kind == "summary_generic":
+        if len(fields) < 2:
+            fields, ctx = generic(r, r.randint(2, 4))
+        q = r.choice(["Resuma o que foi registrado sem inventar.", "Liste os valores do contexto.",
+                      "Resuma os dados sem acrescentar nada."])
+        return ctx, q, " ".join(f"{k}: {literal(v, u)}." for k, _, v, u in fields)
+    raise ValueError(kind)
+
+
+MIX = [("copy", 0.18), ("summary", 0.06), ("copy_generic", 0.26), ("summary_generic", 0.08), ("missing", 0.16),
+       ("judgment", 0.08), ("pii", 0.1), ("injection", 0.08)]
 
 
 def row(i, kind, ctx, question, response):
@@ -249,10 +321,10 @@ def row(i, kind, ctx, question, response):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("--count", type=int, default=12000)
+    p.add_argument("--count", type=int, default=20000)
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--bench", type=Path, default=Path(__file__).resolve().parents[2] / "ARANDU/katsu_native/benchmarks/arandubench.jsonl")
-    p.add_argument("--seed", type=int, default=2027)
+    p.add_argument("--seed", type=int, default=2028)
     a = p.parse_args(argv)
     r = random.Random(a.seed)
     kinds, weights = zip(*MIX)
@@ -260,6 +332,9 @@ def main(argv=None):
     # valores do contexto e saídas proibidas do benchmark não aparecem em nenhuma resposta de treino
     bench_values = {str(v) for c in bench for v in c["context"].values()} | {f for c in bench for f in c.get("forbidden", [])}
     bench_values = {b for b in bench_values if len(b) >= 4}
+    # as chaves do benchmark (placar, minutos, salto_cm...) nunca aparecem num contexto de treino;
+    # dados pessoais (cpf, email) são a exceção: recusá-los é o comportamento a ensinar
+    bench_keys = {k for c in bench for k in c["context"]} - {"cpf", "email"}
     rows, seen, skipped = [], set(), 0
     while len(rows) < a.count:
         kind = r.choices(kinds, weights)[0]
@@ -267,7 +342,7 @@ def main(argv=None):
         key = json.dumps([ctx, q], ensure_ascii=False, sort_keys=True)
         if key in seen:
             continue
-        if any(b in resp for b in bench_values):
+        if any(b in resp for b in bench_values) or bench_keys & set(ctx):
             skipped += 1
             continue
         seen.add(key)
