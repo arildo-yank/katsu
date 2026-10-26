@@ -8,9 +8,13 @@ linha) para o tokenize_corpus, com a divisão treino/validação fixa por hash.
 Saída: train.jsonl, val.jsonl e manifest.json (fontes, licenças, contagens, SHA-256 do dump).
 """
 import argparse
-import gzip
 import hashlib
+import io
+import itertools
 import json
+import multiprocessing
+import os
+import subprocess
 from pathlib import Path
 
 KATSU = Path(__file__).resolve().parents[1]
@@ -32,24 +36,38 @@ def is_val(key: str) -> bool:
     return int(hashlib.sha256(key.encode()).hexdigest(), 16) % 1000 < VAL_PER_MILLE
 
 
-def wiki_articles(path: Path):
-    """O dump alterna uma linha de índice e uma de documento; só o documento interessa."""
-    with gzip.open(path, "rt", encoding="utf-8") as file:
-        for line in file:
-            doc = json.loads(line)
-            if "index" in doc:
-                continue
-            if str(doc.get("namespace")) != "0":
-                continue
-            text = " ".join(str(doc.get("text") or "").replace("\xa0", " ").split())
-            title = str(doc.get("title") or "").strip()
-            yield str(doc.get("page_id")), title, text
+def article(line: str):
+    """Uma linha do dump -> (page_id, título, texto) ou None. O dump alterna uma linha de índice e
+    uma de documento; só o documento interessa."""
+    doc = json.loads(line)
+    if "index" in doc or str(doc.get("namespace")) != "0":
+        return None
+    text = " ".join(str(doc.get("text") or "").replace("\xa0", " ").split())
+    return str(doc.get("page_id")), str(doc.get("title") or "").strip(), text
+
+
+def chunk_articles(lines: list[str]) -> list:
+    return [a for a in map(article, lines) if a is not None]
+
+
+def wiki_articles(path: Path, workers: int):
+    """Artigos na ordem do dump. A descompressão roda no gzip do sistema e o parse do JSON em
+    `workers` processos (o parse é o gargalo: ~1,5 MB/s num processo só)."""
+    with subprocess.Popen(["gzip", "-dc", str(path)], stdout=subprocess.PIPE) as gz:
+        stream = io.TextIOWrapper(gz.stdout, encoding="utf-8")
+        chunks = iter(lambda: list(itertools.islice(stream, 512)), [])
+        with multiprocessing.Pool(workers) as pool:
+            for chunk in pool.imap(chunk_articles, chunks, chunksize=4):
+                yield from chunk
+    if gz.returncode != 0:
+        raise SystemExit(f"gzip falhou ({gz.returncode}) em {path}")
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--wiki", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--workers", type=int, default=os.cpu_count() or 4)
     args = parser.parse_args(argv)
     args.out.mkdir(parents=True, exist_ok=True)
     counts = {"wikipedia": {"train": 0, "val": 0, "skipped_short": 0, "chars": 0},
@@ -57,7 +75,7 @@ def main(argv=None):
     temp = {split: args.out / f"{split}.jsonl.tmp" for split in ("train", "val")}
     files = {split: open(path, "w", encoding="utf-8") for split, path in temp.items()}
     try:
-        for page_id, title, text in wiki_articles(args.wiki):
+        for page_id, title, text in wiki_articles(args.wiki, args.workers):
             if len(text) < MIN_CHARS:
                 counts["wikipedia"]["skipped_short"] += 1
                 continue
