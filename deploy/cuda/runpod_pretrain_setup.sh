@@ -20,7 +20,8 @@ TOKENIZER=${TOKENIZER:-runs/hostinger-sft-134m-20261025/tokenizer.bpe}
 
 mkdir -p data/pretrain/raw
 if ! echo "$DUMP_SHA256  data/pretrain/raw/$DUMP" | sha256sum -c --status 2>/dev/null; then
-  curl -fsS -o "data/pretrain/raw/$DUMP" "$MIRROR/$DUMP"
+  # o espelho às vezes fecha a conexão no meio (2026-10-27): retoma de onde parou
+  curl -fsS --retry 10 --retry-all-errors -C - -o "data/pretrain/raw/$DUMP" "$MIRROR/$DUMP"
   echo "$DUMP_SHA256  data/pretrain/raw/$DUMP" | sha256sum -c
 fi
 
