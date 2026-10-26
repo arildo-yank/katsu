@@ -16,7 +16,7 @@ mkdir -p "$local"
 ssh_() { ssh -i "${SSH_KEY:-$HOME/.ssh/arandu_gpu}" -p "$port" -o BatchMode=yes -o ConnectTimeout=10 "$host" "$@"; }
 pointed=0
 while true; do
-  for f in metrics.jsonl config.json launch.json sft-report.json system_telemetry.json; do
+  for f in metrics.jsonl config.json launch.json sft-report.json system_telemetry.json corpus-eval.jsonl; do
     # só substitui quando o conteúdo mudou: a data do arquivo local é o que o painel usa para
     # dizer que o treino parou; regravar a mesma cópia escondia um processo morto
     if ssh_ "cat '$remote/$f' 2>/dev/null" > "$local/$f.tmp" && [[ -s "$local/$f.tmp" ]] \
