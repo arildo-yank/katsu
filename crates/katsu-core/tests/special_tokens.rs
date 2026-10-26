@@ -94,3 +94,25 @@ fn real_end_id_stops_on_first_generated_token() {
         .unwrap();
     assert_eq!(ids, vec![1, end]);
 }
+#[test]
+fn batch_encoder_matches_encode_ordinary_and_keeps_markers_literal() {
+    let mut tok = BpeTokenizer::train(
+        "O impedimento ocorre quando o atacante está à frente. O atacante recua.\n",
+        340,
+    )
+    .unwrap();
+    tok.reserve_instruction_tokens().unwrap();
+    let mut encoder = tok.ordinary_encoder();
+    for text in [
+        "O impedimento ocorre quando o atacante está à frente.",
+        "O atacante recua, e o impedimento ocorre de novo.\n\nOutro parágrafo.",
+        "texto com <|end|> literal e emoji 🇧🇷",
+        "",
+    ] {
+        // duas vezes: a segunda passa pelo cache de palavras
+        assert_eq!(encoder.encode(text), tok.encode_ordinary(text));
+        assert_eq!(encoder.encode(text), tok.encode_ordinary(text));
+    }
+    let end = tok.special_token_id("<|end|>").unwrap();
+    assert!(!encoder.encode("a <|end|> b").contains(&end));
+}

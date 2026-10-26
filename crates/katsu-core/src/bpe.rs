@@ -18,6 +18,41 @@ fn invalid(message: &str) -> io::Error {
 fn segments(text: &str) -> impl Iterator<Item = &str> {
     text.split_inclusive(char::is_whitespace)
 }
+fn encode_word(word: &str, ranks: &HashMap<Pair, usize>) -> Vec<usize> {
+    let mut ids: Vec<usize> = word.bytes().map(usize::from).collect();
+    loop {
+        let best = ids
+            .windows(2)
+            .filter_map(|p| ranks.get(&(p[0], p[1])).map(|&rank| (rank, (p[0], p[1]))))
+            .min();
+        let Some((rank, pair)) = best else { break };
+        ids = merge(&ids, pair, rank + 256);
+    }
+    ids
+}
+/// Palavras guardadas por codificador; acima disso, as novas são codificadas sem cache.
+const WORD_CACHE_LIMIT: usize = 1 << 20;
+pub struct OrdinaryEncoder {
+    ranks: HashMap<Pair, usize>,
+    cache: HashMap<String, Vec<usize>>,
+}
+impl OrdinaryEncoder {
+    pub fn encode(&mut self, text: &str) -> Vec<usize> {
+        let mut output = Vec::new();
+        for word in segments(text) {
+            if let Some(ids) = self.cache.get(word) {
+                output.extend_from_slice(ids);
+                continue;
+            }
+            let ids = encode_word(word, &self.ranks);
+            output.extend_from_slice(&ids);
+            if self.cache.len() < WORD_CACHE_LIMIT {
+                self.cache.insert(word.to_owned(), ids);
+            }
+        }
+        output
+    }
+}
 fn merge(ids: &[usize], pair: Pair, token: usize) -> Vec<usize> {
     let mut out = Vec::with_capacity(ids.len());
     let mut i = 0;
@@ -164,27 +199,28 @@ impl BpeTokenizer {
         out
     }
     pub fn encode_ordinary(&self, text: &str) -> Vec<usize> {
-        let ranks: HashMap<Pair, usize> = self
-            .merges
+        let ranks = self.ranks();
+        let mut output = Vec::new();
+        for word in segments(text) {
+            output.extend(encode_word(word, &ranks));
+        }
+        output
+    }
+    /// Codificador de texto literal para lotes grandes (corpus de pré-treino). Mesma saída de
+    /// `encode_ordinary`, mas monta a tabela de merges uma vez só e guarda as palavras já vistas.
+    pub fn ordinary_encoder(&self) -> OrdinaryEncoder {
+        OrdinaryEncoder {
+            ranks: self.ranks(),
+            cache: HashMap::new(),
+        }
+    }
+    fn ranks(&self) -> HashMap<Pair, usize> {
+        self.merges
             .iter()
             .copied()
             .enumerate()
             .map(|(rank, p)| (p, rank))
-            .collect();
-        let mut output = Vec::new();
-        for word in segments(text) {
-            let mut ids: Vec<usize> = word.bytes().map(usize::from).collect();
-            loop {
-                let best = ids
-                    .windows(2)
-                    .filter_map(|p| ranks.get(&(p[0], p[1])).map(|&rank| (rank, (p[0], p[1]))))
-                    .min();
-                let Some((rank, pair)) = best else { break };
-                ids = merge(&ids, pair, rank + 256);
-            }
-            output.extend(ids);
-        }
-        output
+            .collect()
     }
     pub fn decode_bytes(&self, ids: &[usize]) -> io::Result<Vec<u8>> {
         let mut bytes = Vec::new();

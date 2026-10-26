@@ -16,3 +16,6 @@ __pycache__/
 # Estado local da máquina
 .DS_Store
 /active-run.json
+
+# Corpus de pré-treino: dump da Wikipedia (5 GB), JSONL e .bin tokenizados
+/data/pretrain/

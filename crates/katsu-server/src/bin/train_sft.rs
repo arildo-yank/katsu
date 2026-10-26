@@ -210,6 +210,38 @@ fn checkpoint(
     Ok(())
 }
 
+/// Corpus da fase de pré-treino/adaptação como IDs u16. `.bin` é a saída do tokenize_corpus
+/// (u16 little-endian, já com <|end|> entre documentos); qualquer outro arquivo é texto.
+fn load_corpus(path: &Path, tok: &BpeTokenizer) -> Result<Vec<u16>, Box<dyn std::error::Error>> {
+    let ids: Vec<u16> = if path.extension().is_some_and(|e| e == "bin") {
+        let bytes = fs::read(path)?;
+        if bytes.len() % 2 != 0 {
+            return Err("corpus .bin with odd byte count".into());
+        }
+        bytes
+            .chunks_exact(2)
+            .map(|b| u16::from_le_bytes([b[0], b[1]]))
+            .collect()
+    } else {
+        let ids = tok.encode(&fs::read_to_string(path)?);
+        ids.into_iter()
+            .map(|id| u16::try_from(id).map_err(|_| "token id exceeds u16"))
+            .collect::<Result<_, _>>()?
+    };
+    if ids.iter().any(|&id| id as usize >= tok.vocab_size()) {
+        return Err("corpus token outside the tokenizer vocabulary".into());
+    }
+    Ok(ids)
+}
+
+/// Janela de 257 tokens (256 de entrada e o alvo deslocado) como IDs do modelo.
+fn window(corpus: &[u16], start: usize) -> Vec<usize> {
+    corpus[start..start + 257]
+        .iter()
+        .map(|&id| id as usize)
+        .collect()
+}
+
 // Stable content fingerprint to reject accidental data changes on resume.
 // SHA-256 provenance is independently enforced by the launcher data gate.
 fn fingerprint(paths: &[&Path]) -> Result<String, Box<dyn std::error::Error>> {
@@ -348,10 +380,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let train = examples(&a[2], &tok, 256)?;
     let eval = examples(&a[3], &tok, 256)?;
     let corpus = if adapt > 0 {
-        tok.encode(&fs::read_to_string(&a[4])?)
+        load_corpus(Path::new(&a[4]), &tok)?
     } else {
         Vec::new()
     };
+    // KATSU_CORPUS_EVAL: corpus de validação (.bin ou texto), medido em janelas fixas antes,
+    // a cada checkpoint e no fim da fase de corpus. Só no motor GPU.
+    let corpus_eval = match std::env::var("KATSU_CORPUS_EVAL") {
+        Ok(path) if !path.is_empty() && adapt > 0 => load_corpus(Path::new(&path), &tok)?,
+        _ => Vec::new(),
+    };
+    let corpus_eval_windows: usize = std::env::var("KATSU_CORPUS_EVAL_WINDOWS")
+        .unwrap_or_else(|_| "64".into())
+        .parse()?;
+    if !corpus_eval.is_empty() && (corpus_eval.len() < 257 || corpus_eval_windows == 0) {
+        return Err("corpus eval too short or zero windows".into());
+    }
+    // KATSU_DEADLINE_SECONDS: teto de tempo da fase de corpus. Ao estourar, grava o checkpoint e
+    // para com erro, sem SFT: retoma depois com KATSU_RESUME (teto de custo no pod).
+    let deadline: Option<f64> = match std::env::var("KATSU_DEADLINE_SECONDS") {
+        Ok(v) if !v.is_empty() => Some(v.parse()?),
+        _ => None,
+    };
+    if std::env::var("KATSU_ENGINE").as_deref() != Ok("gpu")
+        && (!corpus_eval.is_empty() || deadline.is_some())
+    {
+        return Err("KATSU_CORPUS_EVAL and KATSU_DEADLINE_SECONDS need KATSU_ENGINE=gpu".into());
+    }
     if adapt > 0 && corpus.len() < 257 {
         return Err("corpus too short".into());
     }
@@ -419,6 +474,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     metadata["checkpoint_every"] = json!(checkpoint_every);
     metadata["benchmark_only"] = json!(benchmark_only);
     metadata["corpus_tokens"] = json!(corpus.len());
+    metadata["corpus_eval_tokens"] = json!(corpus_eval.len());
+    metadata["corpus_eval_windows"] = json!(corpus_eval_windows);
+    metadata["deadline_seconds"] = json!(deadline);
     metadata["batch_size"] = json!(batch);
     metadata["train_sequence_length"] = json!(256);
     metadata["loss_mask"] = json!("assistant-only");
@@ -444,6 +502,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             train: &train,
             eval: &eval,
             corpus: &corpus,
+            corpus_eval: &corpus_eval,
+            corpus_eval_windows,
+            deadline,
             steps,
             adapt,
             learning_rate,
@@ -523,7 +584,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let lr = scheduled_lr(corpus_lr, step, adapt, warmup_ratio, min_lr_ratio);
         adam.set_learning_rate(lr)?;
         let i = rng.below(corpus.len() - 256);
-        let loss = c.loss_batch_with_backend(&params, &[&corpus[i..i + 257]], backend.clone())?;
+        let loss = c.loss_batch_with_backend(&params, &[&window(&corpus, i)], backend.clone())?;
         let before = moved();
         let (next, value, norm) = update(
             std::mem::take(&mut params),
@@ -653,7 +714,10 @@ mod gpu {
         pub resume_rng: u64,
         pub train: &'a [Example],
         pub eval: &'a [Example],
-        pub corpus: &'a [usize],
+        pub corpus: &'a [u16],
+        pub corpus_eval: &'a [u16],
+        pub corpus_eval_windows: usize,
+        pub deadline: Option<f64>,
         pub steps: usize,
         pub adapt: usize,
         pub learning_rate: f32,
@@ -682,6 +746,43 @@ mod gpu {
             total += t.loss(&one(e)?)?;
         }
         Ok(total / data.len() as f64)
+    }
+
+    /// Perda média em janelas fixas, igualmente espaçadas, do corpus de validação. Todas têm 256
+    /// alvos, então a média dos lotes é a média por token.
+    fn corpus_loss(t: &mut GpuTrainer, r: &Run) -> Result<f64, Box<dyn std::error::Error>> {
+        let span = r.corpus_eval.len() - 257;
+        let starts: Vec<usize> = (0..r.corpus_eval_windows)
+            .map(|k| k * span / r.corpus_eval_windows.max(1))
+            .collect();
+        let mut total = 0.;
+        for chunk in starts.chunks(r.batch) {
+            let windows: Vec<Vec<usize>> =
+                chunk.iter().map(|&i| window(r.corpus_eval, i)).collect();
+            let refs: Vec<&[usize]> = windows.iter().map(Vec::as_slice).collect();
+            total += t.loss(&SftBatch::windows(&refs)?)? * chunk.len() as f64;
+        }
+        Ok(total / starts.len() as f64)
+    }
+
+    fn log_corpus_eval(
+        t: &mut GpuTrainer,
+        r: &Run,
+        log: &mut impl Write,
+        step: usize,
+    ) -> Result<Option<f64>, Box<dyn std::error::Error>> {
+        if r.corpus_eval.is_empty() {
+            return Ok(None);
+        }
+        let loss = corpus_loss(t, r)?;
+        writeln!(
+            log,
+            "{}",
+            json!({"step":step,"loss":loss,"windows":r.corpus_eval_windows})
+        )?;
+        log.flush()?;
+        eprintln!("corpus eval step={step} loss={loss:.4}");
+        Ok(Some(loss))
     }
 
     /// Passo do Adam com as mesmas recusas do `update` do host; devolve a norma.
@@ -756,26 +857,66 @@ mod gpu {
         } else {
             r.resume_step
         };
+        let mut eval_log = if r.corpus_eval.is_empty() || pretrain_start >= r.adapt {
+            None
+        } else {
+            Some(BufWriter::new(
+                fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(r.output.join("corpus-eval.jsonl"))?,
+            ))
+        };
+        let corpus_eval_initial = match eval_log.as_mut() {
+            Some(out) => log_corpus_eval(&mut t, &r, out, pretrain_start)?,
+            None => None,
+        };
+        let mut corpus_eval_final = corpus_eval_initial;
         for s in pretrain_start + 1..=r.adapt {
             let started = std::time::Instant::now();
             let lr = scheduled_lr(r.corpus_lr, s, r.adapt, r.warmup_ratio, r.min_lr_ratio);
             t.set_learning_rate(lr)?;
-            let i = rng.below(r.corpus.len() - 256);
-            let loss = t.loss_and_grad(&SftBatch::windows(&[&r.corpus[i..i + 257]])?)?;
+            // r.batch janelas aleatórias de 256 tokens; com batch 1, o mesmo sorteio de antes.
+            let windows: Vec<Vec<usize>> = (0..r.batch)
+                .map(|_| window(r.corpus, rng.below(r.corpus.len() - 256)))
+                .collect();
+            let refs: Vec<&[usize]> = windows.iter().map(Vec::as_slice).collect();
+            let loss = t.loss_and_grad(&SftBatch::windows(&refs)?)?;
             let norm = step(&mut t, loss)?;
-            if s % r.checkpoint_every == 0 {
+            let out_of_time = r
+                .deadline
+                .is_some_and(|limit| r.wall_started.elapsed().as_secs_f64() > limit);
+            if s % r.checkpoint_every == 0 || out_of_time {
                 save_checkpoint(
                     &t,
                     &json!({"signature":r.signature,"phase":"pretrain","step":s,"rng":rng.0}),
                     &r.output.join("latest.ckpt"),
                 )?;
+                if let Some(out) = eval_log.as_mut() {
+                    corpus_eval_final = log_corpus_eval(&mut t, &r, out, s)?;
+                }
             }
             writeln!(
                 log,
                 "{}",
-                json!({"phase":if r.fresh {"pretrain"} else {"adapt"},"step":s,"epoch":s,"learning_rate":lr,"loss":loss,"grad_l2":norm,"step_seconds":started.elapsed().as_secs_f64(),"input_tokens":256,"target_tokens":256,"transfer_bytes":null})
+                json!({"phase":if r.fresh {"pretrain"} else {"adapt"},"step":s,"epoch":s,"learning_rate":lr,"loss":loss,"grad_l2":norm,"step_seconds":started.elapsed().as_secs_f64(),"batch":r.batch,"input_tokens":256*r.batch,"target_tokens":256*r.batch,"transfer_bytes":null})
             )?;
             log.flush()?;
+            if s % 100 == 0 {
+                eprintln!("pretrain step={s} loss={loss:.4} grad_l2={norm:.4}");
+            }
+            if out_of_time {
+                return Err(format!(
+                    "KATSU_DEADLINE_SECONDS reached at pretrain step {s}/{}; latest.ckpt saved, resume with KATSU_RESUME",
+                    r.adapt
+                )
+                .into());
+            }
+        }
+        if let Some(out) = eval_log.as_mut() {
+            if r.adapt % r.checkpoint_every != 0 {
+                corpus_eval_final = log_corpus_eval(&mut t, &r, out, r.adapt)?;
+            }
         }
         save(&t.params()?, &r.output.join("adapted.ckpt"))?;
         if r.resume_phase != "sft" && r.adapt > 0 {
@@ -870,7 +1011,7 @@ mod gpu {
         };
         save(&t.params()?, &r.output.join("model.ckpt"))?;
         let (free, total) = t.memory()?;
-        let report = json!({"steps":r.steps,"adapt_steps":r.adapt,"learning_rate":r.learning_rate,"train_measured_examples":train_sample.len(),"eval_measured_examples":eval_sample.len(),"train_examples":r.train.len(),"heldout_examples":r.eval.len(),"max_train_tokens":r.train.iter().map(|e|e.ids.len()).max(),"base_eval_loss":before,"initial_train_loss":initial_train,"final_train_loss":final_train,"initial_eval_loss":initial_eval,"final_eval_loss":final_eval,"elapsed_sft_seconds":started.elapsed().as_secs_f64(),"finite_checks_passed":true,"benchmark_only":r.benchmark_only,"corpus_tokens":r.corpus.len(),"wall_seconds":r.wall_started.elapsed().as_secs_f64(),"engine":"gpu","vram_used_mib":(total-free)/(1<<20),"vram_total_mib":total/(1<<20),"kernel_launches":t.kernel_launches()});
+        let report = json!({"steps":r.steps,"adapt_steps":r.adapt,"learning_rate":r.learning_rate,"train_measured_examples":train_sample.len(),"eval_measured_examples":eval_sample.len(),"train_examples":r.train.len(),"heldout_examples":r.eval.len(),"max_train_tokens":r.train.iter().map(|e|e.ids.len()).max(),"base_eval_loss":before,"initial_train_loss":initial_train,"final_train_loss":final_train,"initial_eval_loss":initial_eval,"final_eval_loss":final_eval,"elapsed_sft_seconds":started.elapsed().as_secs_f64(),"finite_checks_passed":true,"benchmark_only":r.benchmark_only,"corpus_tokens":r.corpus.len(),"corpus_eval_windows":if r.corpus_eval.is_empty() {None} else {Some(r.corpus_eval_windows)},"corpus_eval_initial_loss":corpus_eval_initial,"corpus_eval_final_loss":corpus_eval_final,"wall_seconds":r.wall_started.elapsed().as_secs_f64(),"engine":"gpu","vram_used_mib":(total-free)/(1<<20),"vram_total_mib":total/(1<<20),"kernel_launches":t.kernel_launches()});
         fs::write(
             r.output.join("sft-report.json"),
             serde_json::to_vec_pretty(&report)?,
@@ -883,6 +1024,42 @@ mod gpu {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn corpus_bin_and_text_load_the_same_ids() {
+        let tok = BpeTokenizer::train("o atacante recua e o zagueiro sobe ", 300).unwrap();
+        let text = "o atacante recua, o zagueiro sobe";
+        let dir = std::env::temp_dir().join(format!("katsu-corpus-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let (txt, bin) = (dir.join("c.txt"), dir.join("c.bin"));
+        fs::write(&txt, text).unwrap();
+        let ids = tok.encode(text);
+        let bytes: Vec<u8> = ids
+            .iter()
+            .flat_map(|&id| (id as u16).to_le_bytes())
+            .collect();
+        fs::write(&bin, &bytes).unwrap();
+        let from_text = load_corpus(&txt, &tok).unwrap();
+        assert_eq!(from_text, load_corpus(&bin, &tok).unwrap());
+        assert_eq!(
+            from_text.iter().map(|&id| id as usize).collect::<Vec<_>>(),
+            ids
+        );
+        fs::write(&bin, &bytes[1..]).unwrap();
+        assert!(load_corpus(&bin, &tok).is_err(), "odd byte count");
+        fs::write(&bin, 60_000u16.to_le_bytes()).unwrap();
+        assert!(
+            load_corpus(&bin, &tok).is_err(),
+            "id outside the vocabulary"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn window_is_257_ids_from_start() {
+        let corpus: Vec<u16> = (0..300).collect();
+        let w = window(&corpus, 40);
+        assert_eq!(w.len(), 257);
+        assert_eq!((w[0], w[256]), (40, 296));
+    }
     #[test]
     fn warmup_cosine_endpoints() {
         let rates: Vec<_> = (1..=100)

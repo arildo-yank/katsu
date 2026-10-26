@@ -40,7 +40,7 @@ pub use lm::{
 };
 
 mod bpe;
-pub use bpe::{BpeTokenizer, INSTRUCTION_TOKENS};
+pub use bpe::{BpeTokenizer, OrdinaryEncoder, INSTRUCTION_TOKENS};
 
 mod gpu_layout;
 pub use gpu_layout::{GpuLayout, LayerSlots, SftBatch, Slot};
