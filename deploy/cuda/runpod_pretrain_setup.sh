@@ -9,7 +9,7 @@
 #   data/corpus-bilingual-v1/{manifest.json,documents/<obras pt>}
 #   data/sft/distill_arandu_50k.{train,eval}.jsonl
 #   runs/hostinger-sft-134m-20261025/{config.json,tokenizer.bpe}
-#   data/pretrain/SHA256SUMS   (train.bin e val.bin montados no Mac com os mesmos scripts)
+#   data/pretrain/SHA256SUMS   (train.bin e val.bin montados no Mac; pode chegar durante a montagem)
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 DUMP=ptwiki-20251229-cirrussearch-content.json.gz
@@ -18,7 +18,6 @@ DUMP_SHA256=09900536de15513f4f8bd6f3f6f5ec637ccd032bc298c2c548138f593d8dd620
 MIRROR=${MIRROR:-https://mirror.accum.se/mirror/wikimedia.org/other/cirrussearch/20251229}
 TOKENIZER=${TOKENIZER:-runs/hostinger-sft-134m-20261025/tokenizer.bpe}
 
-[[ -f data/pretrain/SHA256SUMS ]] || { echo "falta data/pretrain/SHA256SUMS (do Mac)" >&2; exit 1; }
 mkdir -p data/pretrain/raw
 if ! echo "$DUMP_SHA256  data/pretrain/raw/$DUMP" | sha256sum -c --status 2>/dev/null; then
   curl -fsS -o "data/pretrain/raw/$DUMP" "$MIRROR/$DUMP"
@@ -40,5 +39,11 @@ python3 scripts/build_pretrain_corpus.py --wiki "data/pretrain/raw/$DUMP" --out 
 wait "$build"
 target/release/tokenize_corpus "$TOKENIZER" data/pretrain/train.jsonl data/pretrain/train.bin
 target/release/tokenize_corpus "$TOKENIZER" data/pretrain/val.jsonl data/pretrain/val.bin
-(cd data/pretrain && sha256sum -c SHA256SUMS)
-echo "corpus pronto e igual ao do Mac"
+# SHA256SUMS do Mac pode chegar enquanto o pod monta o corpus; sem ele, só mostra os hashes.
+if [[ -f data/pretrain/SHA256SUMS ]]; then
+  (cd data/pretrain && sha256sum -c SHA256SUMS)
+  echo "corpus pronto e igual ao do Mac"
+else
+  (cd data/pretrain && sha256sum train.bin val.bin)
+  echo "corpus pronto; compare com o SHA256SUMS do Mac antes de treinar" >&2
+fi
