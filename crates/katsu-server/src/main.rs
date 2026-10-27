@@ -16,6 +16,7 @@ use std::{
 };
 use tokio::sync::Semaphore;
 mod calc;
+mod evidence;
 mod grounding;
 /// Sistema do formato de leitura (o mesmo do SFT de leitura e da régua de leitura).
 const READING_SYSTEM: &str = "Você é o Arandu. Responda em português do Brasil usando só o trecho.";
@@ -218,7 +219,7 @@ async fn rag_ask(
     };
     let Some(best) = hits.first() else {
         return Ok(Json(
-            json!({"answer":NO_DATA,"sources":[],"used_model":false}),
+            json!({"answer":NO_DATA,"sources":[],"used_model":false,"fallback_used":false,"response_mode":"no_evidence"}),
         ));
     };
     let req = Generate {
@@ -251,9 +252,18 @@ async fn rag_ask(
             "generation worker failed",
         )
     })??;
-    Ok(Json(
-        json!({"answer":out["text"],"sources":hits,"used_model":true,"prompt_tokens":out["prompt_tokens"]}),
-    ))
+    // Return the complete retrieved passage: even a number present in the source can
+    // be attached to the wrong claim. Keep raw generation separate for audit.
+    let source = hits[0]["text"].as_str().unwrap_or_default();
+    let raw = out["text"].as_str().unwrap_or_default();
+    let (answer, fallback_used) = evidence::quote_or_verified_copy(raw, source);
+    Ok(Json(json!({
+        "answer": answer, "raw_answer": raw, "sources": hits, "used_model": true,
+        "fallback_used": fallback_used, "response_mode": "source_quote",
+        "fallback_reason": if fallback_used { Some("generation_differs_from_complete_source") } else { None },
+        "prompt_tokens": out["prompt_tokens"], "ground_numbers": true,
+        "prompt_truncated": out["prompt_truncated"]
+    })))
 }
 
 /// Adiciona um documento à biblioteca (e ao arquivo, se KATSU_RAG_DOCS estiver definido).
