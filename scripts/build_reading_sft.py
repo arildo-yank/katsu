@@ -18,6 +18,7 @@ import hashlib
 import json
 import random
 import re
+import sys
 from pathlib import Path
 
 KATSU = Path(__file__).resolve().parents[1]
@@ -29,6 +30,13 @@ CHAT_SYSTEM = ("Você é o Arandu. Responda em português do Brasil. Nesta conve
 NO_DATA = ["Não tenho dados suficientes no trecho para responder.",
            "O trecho não informa isso; não tenho dados suficientes para responder."]
 PASSAGE_CHARS = 320
+CONTEXT = 256  # o train_sft recusa o dataset inteiro se um exemplo passar do contexto
+TOKENIZER = KATSU / "runs/context-v3-base/tokenizer.bpe"
+
+
+def fits(tok, example: dict) -> bool:
+    """Mesma conta do train_sft: prompt + resposta + <|end|>, menos o último token, cabe no contexto."""
+    return len(tok.encode(example["prompt"])) + len(tok.encode(example["response"] + "<|end|>")) - 1 <= CONTEXT
 
 MUNICIPIO = re.compile(r"^(?P<x>[^\n(]{3,40}?) é um município brasileiro (?:do estado|localizado no estado) d[aoe] "
                        r"(?P<a>[A-ZÁÉÍÓÚ][\w ]{2,25}?)[,.]")
@@ -148,6 +156,12 @@ def main(argv=None):
             continue
         rows.append(row(i, "ausente", READING_SYSTEM, f"Trecho: {other}\nPergunta: {q}", r.choice(NO_DATA)))
     rows += [row(i, "calc", CHAT_SYSTEM, q, ans) for i, (q, ans) in enumerate(calc_examples(r, a.calc))]
+    sys.path.insert(0, str(KATSU.parent / "ARANDU/scripts"))
+    from katsu_bpe import KatsuBpe
+    tok = KatsuBpe.load(TOKENIZER)
+    before = len(rows)
+    rows = [x for x in rows if fits(tok, x)]
+    too_long = before - len(rows)
     r.shuffle(rows)
     val = [x for x in rows if int(hashlib.sha256(x["id"].encode()).hexdigest(), 16) % 100 < 5]
     train = [x for x in rows if x not in val]
@@ -157,7 +171,7 @@ def main(argv=None):
     for x in rows:
         counts[x["kind"]] = counts.get(x["kind"], 0) + 1
     manifest = {"generator": "scripts/build_reading_sft.py", "seed": a.seed, "train": len(train), "eval": len(val),
-                "kinds": counts, "pool_sizes": {k: len(v) for k, v in pools.items()}, "excluded_ruler_terms": len(banned),
+                "kinds": counts, "pool_sizes": {k: len(v) for k, v in pools.items()}, "excluded_ruler_terms": len(banned), "dropped_over_context": too_long,
                 "source": "Wikipedia PT (split de treino do pré-treino), CC BY-SA 4.0"}
     Path(f"{a.out}.manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
     print(json.dumps(manifest, ensure_ascii=False))
