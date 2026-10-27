@@ -13,6 +13,43 @@ use crate::{tensor::zeros_buffer, Tensor, TensorError};
 type Result<T> = std::result::Result<T, TensorError>;
 
 /// Otimizador que transforma parâmetros com gradiente em novas folhas.
+/// Passo só nos parâmetros não congelados (`frozen[i] == false`). Os congelados voltam como
+/// estão (o mesmo tensor, bit a bit) e o otimizador nem os vê: os momentos do Adam ficam só para
+/// os treináveis, na ordem em que aparecem. Usado no Arandu-Ve para treinar o projetor com o
+/// modelo de linguagem congelado.
+pub fn step_partial<O: Optimizer + ?Sized>(
+    optimizer: &mut O,
+    params: &[Tensor],
+    frozen: &[bool],
+) -> Result<Vec<Tensor>> {
+    if frozen.len() != params.len() {
+        return Err(TensorError::InvalidShape(
+            "frozen mask must have one entry per parameter",
+        ));
+    }
+    let trainable: Vec<Tensor> = params
+        .iter()
+        .zip(frozen)
+        .filter(|(_, &f)| !f)
+        .map(|(p, _)| p.clone())
+        .collect();
+    if trainable.is_empty() {
+        return Ok(params.to_vec());
+    }
+    let mut updated = optimizer.step(&trainable)?.into_iter();
+    params
+        .iter()
+        .zip(frozen)
+        .map(|(p, &f)| {
+            if f {
+                Ok(p.clone())
+            } else {
+                updated.next().ok_or(TensorError::OptimizerState)
+            }
+        })
+        .collect()
+}
+
 pub trait Optimizer {
     fn step(&mut self, params: &[Tensor]) -> Result<Vec<Tensor>>;
     /// Como `step`, mas recebe os parâmetros por valor: o otimizador pode reaproveitar o

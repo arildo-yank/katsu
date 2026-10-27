@@ -2,9 +2,10 @@
 //! e pesos depois de um passo do Adam. Sem GPU (ou fora do Linux) os testes são pulados.
 #![cfg(feature = "cuda")]
 use katsu_core::{
-    Adam, GemmKernel, GpuTrainOptions, GpuTrainer, KatsuLmConfig, Optimizer, SftBatch, Tensor,
-    TensorError,
+    step_partial, Adam, CpuBackend, GemmKernel, GpuTrainOptions, GpuTrainer, KatsuLmConfig,
+    Optimizer, SftBatch, Tensor, TensorError,
 };
+use std::sync::Arc;
 
 type Example<'a> = (&'a [usize], usize);
 
@@ -291,5 +292,179 @@ fn odd_sizes_match_cpu_autograd() {
             gemm: GemmKernel::Reference16,
             fused: false,
         },
+    );
+}
+
+// ---------------------------------------------------------------------------------------
+// Arandu-Ve, etapa 0: entrada por vetores (prefixo) e congelamento, contra a CPU.
+
+fn prefix_data(rows: usize, d: usize, seed: u64) -> Vec<f32> {
+    tokens(seed, rows * d, 2001)
+        .into_iter()
+        .map(|x| (x as f32 / 1000.0 - 1.0) * 0.5)
+        .collect()
+}
+
+/// Perda, gradiente de cada tensor e gradiente dos vetores do prefixo iguais ao `prefix_loss`
+/// da CPU. Com `perturb`, um vetor do lote da GPU muda 10% e a comparação do gradiente do
+/// prefixo tem de falhar (controle negativo).
+fn check_prefix_parity(c: KatsuLmConfig, options: GpuTrainOptions, perturb: bool) {
+    let tol = if options.gemm == GemmKernel::Tf32 {
+        TF32
+    } else {
+        STRICT
+    };
+    let params = c.init(13).unwrap();
+    let (a, b, e) = (
+        tokens(4, 9, c.vocab_size),
+        tokens(5, 6, c.vocab_size),
+        tokens(6, 12, c.vocab_size),
+    );
+    let examples: Vec<Example> = vec![(&a, 3), (&b, 1), (&e, 7)];
+    let n = 3;
+    let d = c.embed_dim;
+    let data = prefix_data(examples.len() * n, d, 7);
+    let prefix = Tensor::new(data.clone(), &[examples.len() * n, d]).unwrap();
+    let Some(mut gpu) = trainer(c, &params, &Adam::new(1e-3).unwrap(), 4, options) else {
+        return;
+    };
+    let mut sent = data.clone();
+    if perturb {
+        sent[d + 2] *= 1.1;
+    }
+    let batch = SftBatch::with_prefix(&examples, &sent, n, d).unwrap();
+    let loss = gpu.loss_and_grad(&batch).unwrap();
+    let cpu = c
+        .prefix_loss(
+            &params,
+            &prefix,
+            n,
+            &examples,
+            Arc::new(CpuBackend::default()),
+        )
+        .unwrap();
+    let expected = f64::from(cpu.data()[0]);
+    cpu.backward().unwrap();
+    let host_prefix = prefix.grad().unwrap().as_ref().unwrap().clone();
+    let check_prefix = || {
+        assert_close(
+            "prefixo",
+            &gpu.prefix_grad().unwrap(),
+            &host_prefix,
+            tol.grad,
+            1e-10,
+        )
+    };
+    if perturb {
+        let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(check_prefix)).is_err();
+        assert!(
+            failed,
+            "o controle negativo passou: o teste não enxerga um prefixo errado"
+        );
+        return;
+    }
+    assert!(
+        (loss - expected).abs() <= tol.loss * expected.abs(),
+        "perda GPU {loss} vs CPU {expected}"
+    );
+    check_prefix();
+    for (i, (p, g)) in params.iter().zip(gpu.grads().unwrap()).enumerate() {
+        let host = p.grad().unwrap();
+        let host = host.as_ref().expect("gradiente da CPU");
+        assert_close(
+            &format!("grad[{i}] {:?}", p.shape()),
+            &g,
+            host,
+            tol.grad,
+            1e-10,
+        );
+    }
+}
+
+#[test]
+fn prefix_input_matches_cpu_autograd() {
+    check_prefix_parity(
+        tiny(),
+        GpuTrainOptions {
+            gemm: GemmKernel::Tiled64,
+            fused: true,
+        },
+        false,
+    );
+}
+
+#[test]
+fn prefix_input_matches_cpu_autograd_within_tf32_precision() {
+    check_prefix_parity(
+        tiny(),
+        GpuTrainOptions {
+            gemm: GemmKernel::Tf32,
+            fused: true,
+        },
+        false,
+    );
+}
+
+#[test]
+fn prefix_parity_detects_a_wrong_vector() {
+    check_prefix_parity(
+        tiny(),
+        GpuTrainOptions {
+            gemm: GemmKernel::Tiled64,
+            fused: true,
+        },
+        true,
+    );
+}
+
+#[test]
+fn frozen_tensors_stay_bit_identical_on_gpu() {
+    let c = tiny();
+    let params = c.init(17).unwrap();
+    let (a, b) = (tokens(8, 10, c.vocab_size), tokens(9, 7, c.vocab_size));
+    let examples: Vec<Example> = vec![(&a, 4), (&b, 2)];
+    let lr = 1e-3;
+    let options = GpuTrainOptions {
+        gemm: GemmKernel::Tiled64,
+        fused: true,
+    };
+    let Some(mut gpu) = trainer(c, &params, &Adam::new(lr).unwrap(), 4, options) else {
+        return;
+    };
+    // tudo congelado menos o embedding de posição, uma projeção Q (fatia intercalada da
+    // matriz QKV) e a cabeça de saída
+    let q = 2 + 2; // depois de wte, wpe, ln1_g, ln1_b vem o Q da cabeça 0
+    let trainable = [1, q, params.len() - 1];
+    let frozen: Vec<bool> = (0..params.len()).map(|i| !trainable.contains(&i)).collect();
+    gpu.set_frozen(&frozen).unwrap();
+    gpu.loss_and_grad(&SftBatch::new(&examples).unwrap())
+        .unwrap();
+    assert_eq!(gpu.adam_step().unwrap(), 0);
+    let after = gpu.params().unwrap();
+    cpu_loss(&c, &params, &examples).backward().unwrap();
+    let stepped = step_partial(&mut Adam::new(lr).unwrap(), &params, &frozen).unwrap();
+    for (i, (x, y)) in after.iter().zip(&stepped).enumerate() {
+        if frozen[i] {
+            assert_eq!(
+                x.data(),
+                params[i].data(),
+                "tensor congelado {i} mudou na GPU"
+            );
+        } else {
+            assert_ne!(x.data(), params[i].data(), "tensor treinável {i} não mudou");
+            assert_close(
+                &format!("param[{i}]"),
+                x.data(),
+                y.data(),
+                0.0,
+                2.0 * lr + 1e-6,
+            );
+        }
+    }
+    assert!(gpu.grads().unwrap().iter().flatten().all(|&g| g == 0.0));
+    assert!(gpu.set_frozen(&frozen[1..]).is_err());
+    assert!(
+        gpu.prefix_grad().is_err(),
+        "o último lote não tinha prefixo"
     );
 }

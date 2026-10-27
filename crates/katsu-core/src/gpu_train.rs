@@ -113,6 +113,9 @@ const KERNELS: &[&str] = &[
     "ce_fwd_bwd",
     "adam",
     "sumsq",
+    "prefix_fwd",
+    "embed_bwd_prefix",
+    "adam_masked",
 ];
 const SUMSQ_BLOCKS: usize = 1024;
 
@@ -178,6 +181,12 @@ pub struct GpuTrainer {
     a: Acts,
     hyper: (f32, f32, f32, f32, i32),
     launches: u64,
+    /// Arandu-Ve: vetores do prefixo e o gradiente deles, alocados no primeiro lote com prefixo.
+    pre: Option<(CudaSlice<f32>, CudaSlice<f32>)>,
+    /// (prefix_len, batch) do último lote enviado.
+    prefix: (usize, usize),
+    /// Máscara do Adam (1 = treinável), por peso da arena; `None` = nada congelado.
+    trainable: Option<CudaSlice<u8>>,
 }
 
 impl std::fmt::Debug for GpuTrainer {
@@ -413,6 +422,9 @@ impl GpuTrainer {
             a,
             hyper: adam.hyperparameters(),
             launches: 0,
+            pre: None,
+            prefix: (0, 0),
+            trainable: None,
         };
         trainer.load_adam(adam)?;
         Ok(trainer)
@@ -656,6 +668,29 @@ impl GpuTrainer {
         self.stream
             .memcpy_htod(&batch.weights, &mut self.wt.slice_mut(0..rows))
             .map_err(error)?;
+        let n = batch.prefix_len;
+        if n > 0 {
+            let d = self.config.embed_dim;
+            if n >= t || batch.prefix.len() != b * n * d {
+                return Err(TensorError::InvalidShape(
+                    "prefix must be batch × prefix_len × d, shorter than the width",
+                ));
+            }
+            if batch.prefix.iter().any(|x| !x.is_finite()) {
+                return Err(TensorError::InvalidShape("prefix vectors must be finite"));
+            }
+            if self.pre.is_none() {
+                let cap = self.max_batch * self.max_t * d;
+                let pre = self.stream.alloc_zeros::<f32>(cap).map_err(error)?;
+                let dpre = self.stream.alloc_zeros::<f32>(cap).map_err(error)?;
+                self.pre = Some((pre, dpre));
+            }
+            let (pre, _) = self.pre.as_mut().expect("alocado acima");
+            self.stream
+                .memcpy_htod(&batch.prefix, &mut pre.slice_mut(0..b * n * d))
+                .map_err(error)?;
+        }
+        self.prefix = (n, b);
         Ok((b, t))
     }
 
@@ -696,6 +731,22 @@ impl GpuTrainer {
                 I(int(d)?),
             ],
         )?;
+        if let (n @ 1.., Some((pre, _))) = (self.prefix.0, &self.pre) {
+            let pre = pre.device_ptr(&self.stream).0;
+            self.elementwise(
+                "prefix_fwd",
+                rows * d,
+                &[
+                    P(pre),
+                    P(wpe),
+                    P(a.x),
+                    I(int(rows)?),
+                    I(int(t)?),
+                    I(int(n)?),
+                    I(int(d)?),
+                ],
+            )?;
+        }
         for l in 0..c.layers {
             let s = self.layout.layers[l];
             let x = at(a.x, l * a.sd);
@@ -1028,6 +1079,24 @@ impl GpuTrainer {
         }
         let tok = self.tok.device_ptr(&self.stream).0;
         let (dwte, dwpe) = (at(g, self.layout.wte), at(g, self.layout.wpe));
+        if let (n @ 1.., Some((_, dpre))) = (self.prefix.0, &self.pre) {
+            let dpre = dpre.device_ptr(&self.stream).0;
+            return self.elementwise(
+                "embed_bwd_prefix",
+                rows * d,
+                &[
+                    P(a.dres),
+                    P(tok),
+                    P(dwte),
+                    P(dwpe),
+                    P(dpre),
+                    I(int(rows)?),
+                    I(int(t)?),
+                    I(int(n)?),
+                    I(int(d)?),
+                ],
+            );
+        }
         self.elementwise(
             "embed_bwd",
             rows * d,
@@ -1083,6 +1152,30 @@ impl GpuTrainer {
             .map_err(error)?;
         let nonfinite = self.nonfinite.device_ptr(&self.stream).0;
         let total = self.layout.total;
+        if let Some(mask) = &self.trainable {
+            let mask = mask.device_ptr(&self.stream).0;
+            let args = [
+                P(self.w),
+                P(self.g),
+                P(self.pm),
+                P(self.pv),
+                P(mask),
+                L(long(total)),
+                F(beta1),
+                F(beta2),
+                F(lr),
+                F(eps),
+                F(c1),
+                F(c2),
+                P(nonfinite),
+            ];
+            self.elementwise("adam_masked", total, &args)?;
+            let mut count = [0u32];
+            self.stream
+                .memcpy_dtoh(&self.nonfinite, &mut count)
+                .map_err(error)?;
+            return Ok(count[0] as usize);
+        }
         let args = [
             P(self.w),
             P(self.g),
@@ -1103,6 +1196,43 @@ impl GpuTrainer {
             .memcpy_dtoh(&self.nonfinite, &mut count)
             .map_err(error)?;
         Ok(count[0] as usize)
+    }
+
+    /// Gradiente da perda em relação aos vetores do prefixo do último `loss_and_grad`,
+    /// `[batch·prefix_len·d]`, na ordem de `SftBatch::with_prefix`. O projetor (no host)
+    /// continua o backward a partir daqui.
+    pub fn prefix_grad(&self) -> Result<Vec<f32>> {
+        let (n, b) = self.prefix;
+        let Some((_, dpre)) = (n > 0).then_some(()).and(self.pre.as_ref()) else {
+            return Err(TensorError::InvalidShape("last batch had no prefix"));
+        };
+        let mut all = self.stream.clone_dtoh(dpre).map_err(error)?;
+        all.truncate(b * n * self.config.embed_dim);
+        Ok(all)
+    }
+
+    /// Congela tensores do checkpoint (`frozen[i]`, na ordem de `params()`): o Adam deixa os
+    /// pesos deles intactos e não acumula momento, e o gradiente deles é zerado a cada passo.
+    /// Q, K e V são fatias intercaladas de uma matriz só; a máscara segue cada slot.
+    pub fn set_frozen(&mut self, frozen: &[bool]) -> Result<()> {
+        if frozen.len() != self.layout.slots.len() {
+            return Err(TensorError::InvalidShape(
+                "frozen mask must have one entry per checkpoint tensor",
+            ));
+        }
+        if !frozen.iter().any(|&f| f) {
+            self.trainable = None;
+            return Ok(());
+        }
+        let mut mask = vec![1u8; self.layout.total];
+        for (slot, _) in self.layout.slots.iter().zip(frozen).filter(|(_, &f)| f) {
+            for r in 0..slot.rows {
+                let at = slot.offset + r * slot.ld;
+                mask[at..at + slot.cols].fill(0);
+            }
+        }
+        self.trainable = Some(self.stream.clone_htod(&mask).map_err(error)?);
+        Ok(())
     }
 
     /// Pesos atuais nos shapes do checkpoint.

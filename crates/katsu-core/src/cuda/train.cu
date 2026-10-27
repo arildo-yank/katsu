@@ -70,6 +70,36 @@ extern "C" __global__ void embed_bwd(const float* dx, const int* tok, float* dwt
     atomicAdd(dwpe + (long long)(r % t) * d + c, g);
 }
 
+// Arandu-Ve: as n primeiras posições de cada sequência recebem vetores (prefixo, [b·n, d]) no
+// lugar do embedding de token: x = pre[sequência, p] + wpe[p]. Roda depois do embed_fwd.
+extern "C" __global__ void prefix_fwd(const float* pre, const float* wpe, float* out, int rows,
+                                      int t, int n, int d) {
+    long long i = blockIdx.x * (long long)blockDim.x + threadIdx.x;
+    if (i >= (long long)rows * d) return;
+    int r = (int)(i / d), c = (int)(i % d), p = r % t;
+    if (p >= n) return;
+    out[i] = pre[((long long)(r / t) * n + p) * d + c] + wpe[(long long)p * d + c];
+}
+// embed_bwd com prefixo: nas posições do prefixo o gradiente vai para o vetor (dpre, escrito
+// por inteiro a cada lote) e para o embedding de posição, nunca para a linha do token de
+// preenchimento; nas demais, como no embed_bwd.
+extern "C" __global__ void embed_bwd_prefix(const float* dx, const int* tok, float* dwte,
+                                            float* dwpe, float* dpre, int rows, int t, int n,
+                                            int d) {
+    long long i = blockIdx.x * (long long)blockDim.x + threadIdx.x;
+    if (i >= (long long)rows * d) return;
+    int r = (int)(i / d), c = (int)(i % d), p = r % t;
+    float g = dx[i];
+    if (p < n) {
+        dpre[((long long)(r / t) * n + p) * d + c] = g;
+        if (g != 0.0f) atomicAdd(dwpe + (long long)p * d + c, g);
+        return;
+    }
+    if (g == 0.0f) return;
+    atomicAdd(dwte + (long long)tok[r] * d + c, g);
+    atomicAdd(dwpe + (long long)p * d + c, g);
+}
+
 // Um warp por linha.
 extern "C" __global__ void layernorm_fwd(const float* x, const float* g, const float* b, float* out,
                                          float* mean, float* rstd, int rows, int d) {
@@ -379,6 +409,29 @@ extern "C" __global__ void adam(float* w, float* g, float* m, float* v, long lon
                                 unsigned int* nonfinite) {
     long long i = blockIdx.x * (long long)blockDim.x + threadIdx.x;
     if (i >= count) return;
+    float gi = g[i];
+    float mi = beta1 * m[i] + (1.0f - beta1) * gi;
+    float vi = beta2 * v[i] + (1.0f - beta2) * gi * gi;
+    m[i] = mi;
+    v[i] = vi;
+    float mh = mi / c1, vh = vi / c2;
+    float wi = w[i] - lr * mh / (sqrtf(vh) + eps);
+    w[i] = wi;
+    g[i] = 0.0f;
+    if (!isfinite(wi)) atomicAdd(nonfinite, 1u);
+}
+// Adam com máscara de congelamento: peso com mask 0 não muda nem acumula momento; o
+// gradiente dele é zerado, como o dos demais.
+extern "C" __global__ void adam_masked(float* w, float* g, float* m, float* v,
+                                       const unsigned char* mask, long long count, float beta1,
+                                       float beta2, float lr, float eps, float c1, float c2,
+                                       unsigned int* nonfinite) {
+    long long i = blockIdx.x * (long long)blockDim.x + threadIdx.x;
+    if (i >= count) return;
+    if (!mask[i]) {
+        g[i] = 0.0f;
+        return;
+    }
     float gi = g[i];
     float mi = beta1 * m[i] + (1.0f - beta1) * gi;
     float vi = beta2 * v[i] + (1.0f - beta2) * gi * gi;

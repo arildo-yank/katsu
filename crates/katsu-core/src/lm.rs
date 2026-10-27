@@ -287,12 +287,120 @@ impl KatsuLmConfig {
         if t > self.block_size {
             return Err(TensorError::InvalidShape("sequence exceeds block_size"));
         }
-        let add = |a: &Tensor, b: &Tensor| a.add_with_backend(b, backend.clone());
         let positions: Vec<usize> = (0..tokens.len()).map(|i| i % t).collect();
-        let mut x = add(
-            &params[0].gather_rows(tokens)?,
-            &params[1].gather_rows(&positions)?,
-        )?;
+        let x = params[0]
+            .gather_rows(tokens)?
+            .add_with_backend(&params[1].gather_rows(&positions)?, backend.clone())?;
+        self.forward_embedded(params, x, batch, t, backend)
+    }
+
+    /// Entrada mista do Arandu-Ve: as `n` primeiras posições de cada sequência recebem vetores
+    /// (`prefix`, `[batch·n, d]`, ex.: a imagem projetada) no lugar do embedding de token; as
+    /// demais, os `tokens` (`batch·m`, achatados). Toda posição soma o embedding de posição.
+    /// Logits `[batch, n+m, vocab]`; o gradiente chega a `prefix`.
+    pub fn forward_with_prefix(
+        &self,
+        params: &[Tensor],
+        prefix: &Tensor,
+        n: usize,
+        tokens: &[usize],
+        batch: usize,
+        backend: Arc<dyn Backend>,
+    ) -> Result<Tensor> {
+        self.check_params(params)?;
+        if n == 0 || batch == 0 || tokens.is_empty() || tokens.len() % batch != 0 {
+            return Err(TensorError::InvalidShape(
+                "prefix needs n > 0 and a rectangular token batch",
+            ));
+        }
+        if prefix.shape() != [batch * n, self.embed_dim] {
+            return Err(TensorError::InvalidShape(
+                "prefix must be [batch·n, embed_dim]",
+            ));
+        }
+        let m = tokens.len() / batch;
+        let t = n + m;
+        if t > self.block_size {
+            return Err(TensorError::InvalidShape(
+                "prefix + tokens exceed block_size",
+            ));
+        }
+        // Empilha [prefixo; embeddings dos tokens] e reordena por sequência: o gather_rows
+        // devolve o gradiente para cada origem, vetor ou linha da tabela de tokens.
+        let stacked = Tensor::concat(&[prefix.clone(), params[0].gather_rows(tokens)?], 0)?;
+        let order: Vec<usize> = (0..batch)
+            .flat_map(|b| (b * n..(b + 1) * n).chain(batch * n + b * m..batch * n + (b + 1) * m))
+            .collect();
+        let positions: Vec<usize> = (0..batch * t).map(|i| i % t).collect();
+        let x = stacked
+            .gather_rows(&order)?
+            .add_with_backend(&params[1].gather_rows(&positions)?, backend.clone())?;
+        self.forward_embedded(params, x, batch, t, backend)
+    }
+
+    /// Perda do SFT com prefixo de vetores: média, entre os exemplos, da entropia cruzada só nos
+    /// tokens da resposta (`ids[start..]`). As posições do prefixo nunca entram na perda. Cada
+    /// exemplo usa as linhas `i·n..(i+1)·n` de `prefix`. Mesma conta de `SftBatch::with_prefix`.
+    pub fn prefix_loss(
+        &self,
+        params: &[Tensor],
+        prefix: &Tensor,
+        n: usize,
+        examples: &[(&[usize], usize)],
+        backend: Arc<dyn Backend>,
+    ) -> Result<Tensor> {
+        if examples.is_empty()
+            || examples
+                .iter()
+                .any(|(ids, start)| *start == 0 || *start >= ids.len())
+        {
+            return Err(TensorError::InvalidShape(
+                "prefix SFT needs answers after a prompt",
+            ));
+        }
+        if prefix.shape().first() != Some(&(examples.len() * n)) {
+            return Err(TensorError::InvalidShape(
+                "prefix rows must be examples × n",
+            ));
+        }
+        let mut total: Option<Tensor> = None;
+        for (i, (ids, start)) in examples.iter().enumerate() {
+            let rows: Vec<usize> = (i * n..(i + 1) * n).collect();
+            let inputs = &ids[..ids.len() - 1];
+            let logits = self
+                .forward_with_prefix(
+                    params,
+                    &prefix.gather_rows(&rows)?,
+                    n,
+                    inputs,
+                    1,
+                    backend.clone(),
+                )?
+                .reshape(&[n + inputs.len(), self.vocab_size])?;
+            let answer: Vec<usize> = (n + start - 1..n + ids.len() - 1).collect();
+            let ce = logits
+                .gather_rows(&answer)?
+                .cross_entropy_with_backend(&ids[*start..], backend.clone())?;
+            total = Some(match total {
+                Some(sum) => sum.add(&ce)?,
+                None => ce,
+            });
+        }
+        total
+            .expect("at least one example")
+            .mul(&Tensor::scalar(1.0 / examples.len() as f32)?)
+    }
+
+    /// Camadas e cabeça sobre embeddings já montados (`x`, `[batch·t, d]`).
+    fn forward_embedded(
+        &self,
+        params: &[Tensor],
+        mut x: Tensor,
+        batch: usize,
+        t: usize,
+        backend: Arc<dyn Backend>,
+    ) -> Result<Tensor> {
+        let add = |a: &Tensor, b: &Tensor| a.add_with_backend(b, backend.clone());
         let dh = self.embed_dim / self.heads;
         let mm = |a: &Tensor, b: &Tensor| a.matmul_with_backend(b, backend.clone());
         for layer in 0..self.layers {
@@ -579,7 +687,7 @@ impl SplitMix64 {
     }
 
     /// Uniforme em [-a, a] com desvio-padrão `std` (a = std·√3).
-    fn tensor(&mut self, shape: &[usize], std: f32) -> Result<Tensor> {
+    pub(crate) fn tensor(&mut self, shape: &[usize], std: f32) -> Result<Tensor> {
         let bound = std * 3f32.sqrt();
         let count = shape.iter().product();
         let data = (0..count)

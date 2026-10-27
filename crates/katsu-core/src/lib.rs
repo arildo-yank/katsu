@@ -26,7 +26,7 @@ mod ops;
 pub use ops::LAYER_NORM_EPS;
 
 mod optim;
-pub use optim::{fit, Adam, AdamStep, EpochMetrics, Optimizer, Sgd};
+pub use optim::{fit, step_partial, Adam, AdamStep, EpochMetrics, Optimizer, Sgd};
 
 mod resident;
 pub use resident::{
@@ -34,10 +34,12 @@ pub use resident::{
 };
 
 mod lm;
+mod vision;
 pub use lm::{
     load_params, penalize_repetitions, save_params, CharTokenizer, GenerationOptions,
     KatsuLmConfig, SplitMix64,
 };
+pub use vision::Projector;
 
 mod bpe;
 pub use bpe::{BpeTokenizer, OrdinaryEncoder, INSTRUCTION_TOKENS};

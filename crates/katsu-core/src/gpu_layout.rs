@@ -220,6 +220,10 @@ pub struct SftBatch {
     pub weights: Vec<f32>,
     /// Tokens reais de entrada (sem o padding), para medir tokens/s.
     pub input_tokens: usize,
+    /// Arandu-Ve: quantas posições do começo de cada sequência recebem vetores (0 = nenhuma).
+    pub prefix_len: usize,
+    /// Vetores do prefixo, `[batch·prefix_len·d]`, em ordem de sequência.
+    pub prefix: Vec<f32>,
 }
 
 impl SftBatch {
@@ -262,7 +266,48 @@ impl SftBatch {
             targets,
             weights,
             input_tokens,
+            prefix_len: 0,
+            prefix: Vec::new(),
         })
+    }
+
+    /// Lote do Arandu-Ve: cada exemplo começa com `n` vetores (`prefix`, `[exemplos·n·d]`) e
+    /// segue com os tokens; só a resposta tem peso, como em `new` (mesma conta de
+    /// `KatsuLmConfig::prefix_loss`). As posições do prefixo levam o token 0, que não é lido, e
+    /// peso 0: nunca entram na perda.
+    pub fn with_prefix(
+        examples: &[(&[usize], usize)],
+        prefix: &[f32],
+        n: usize,
+        d: usize,
+    ) -> Result<Self> {
+        if n == 0 || d == 0 || prefix.len() != examples.len() * n * d {
+            return Err(TensorError::InvalidShape(
+                "prefix must be examples × n × d with n, d > 0",
+            ));
+        }
+        let mut batch = Self::new(examples)?;
+        let (b, text) = (batch.batch, batch.width);
+        let width = n + text;
+        let shift = |v: &[usize]| -> Vec<usize> {
+            (0..b)
+                .flat_map(|i| {
+                    std::iter::repeat_n(0, n).chain(v[i * text..(i + 1) * text].iter().copied())
+                })
+                .collect()
+        };
+        batch.tokens = shift(&batch.tokens);
+        batch.targets = shift(&batch.targets);
+        batch.weights = (0..b)
+            .flat_map(|i| {
+                std::iter::repeat_n(0.0, n)
+                    .chain(batch.weights[i * text..(i + 1) * text].iter().copied())
+            })
+            .collect();
+        batch.width = width;
+        batch.prefix_len = n;
+        batch.prefix = prefix.to_vec();
+        Ok(batch)
     }
 
     /// Janelas de mesmo tamanho do pré-treino (`loss_batch_with_backend`): todas as linhas
@@ -289,6 +334,8 @@ impl SftBatch {
                 .collect(),
             weights: vec![weight; batch * width],
             input_tokens: batch * width,
+            prefix_len: 0,
+            prefix: Vec::new(),
         })
     }
 }
