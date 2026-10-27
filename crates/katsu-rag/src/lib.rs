@@ -83,10 +83,26 @@ pub fn chunks(text: &str, max_chars: usize) -> Vec<String> {
     out
 }
 
-fn sentences(text: &str) -> impl Iterator<Item = &str> {
-    text.split_inclusive(['.', '!', '?', '\n'])
+/// Frases: terminam em `.`, `!` ou `?` seguido de espaço (ou no fim), ou em quebra de linha. O ponto
+/// de "6.000" ou de "3.5" não corta a frase.
+fn sentences(text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    let mut chars = text.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        let next = chars.peek().map(|&(_, n)| n);
+        let ends =
+            c == '\n' || (matches!(c, '.' | '!' | '?') && next.is_none_or(char::is_whitespace));
+        if ends {
+            out.push(&text[start..i + c.len_utf8()]);
+            start = i + c.len_utf8();
+        }
+    }
+    out.push(&text[start..]);
+    out.into_iter()
         .map(str::trim)
         .filter(|s| !s.is_empty())
+        .collect()
 }
 
 fn split_long(sentence: &str, max_chars: usize) -> Vec<&str> {
@@ -227,6 +243,17 @@ mod tests {
             terms("São Paulo, Brasília"),
             vec!["sao", "paulo", "brasilia"]
         );
+    }
+
+    #[test]
+    fn numbers_with_points_stay_whole() {
+        let text = "Vive a 6.000 metros. Tem 3.5 cm de comprimento.";
+        // o mínimo é 40 caracteres: cada frase vira um trecho, sem cortar o 6.000 nem o 3.5
+        assert_eq!(
+            chunks(text, 20),
+            vec!["Vive a 6.000 metros.", "Tem 3.5 cm de comprimento."]
+        );
+        assert_eq!(chunks(text, 200), vec![text]);
     }
 
     #[test]

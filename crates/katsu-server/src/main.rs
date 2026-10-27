@@ -21,6 +21,10 @@ mod grounding;
 /// Sistema do formato de leitura (o mesmo do SFT de leitura e da régua de leitura).
 const READING_SYSTEM: &str = "Você é o Arandu. Responda em português do Brasil usando só o trecho.";
 const NO_DATA: &str = "Não tenho dados suficientes nos documentos para responder.";
+/// Resposta de leitura com menos que isso das palavras de conteúdo no trecho vira recusa
+/// (calibrado nas réguas de leitura em 28/10/2026; ARANDU docs/teste-recusas-2026-10-28.md).
+const MIN_SUPPORT: f32 = 0.7;
+const UNSUPPORTED: &str = "Não tenho dados suficientes no trecho para confirmar uma resposta.";
 const MAX_DOCUMENT_CHARS: usize = 200_000;
 /// Mesmos tetos do treinador (train_sft); cobrem o perfil 134M (12×768, 12 heads, contexto 256).
 const MAX_EMBED_DIM: usize = 1024;
@@ -58,6 +62,9 @@ struct Generate {
     /// true: todo número da resposta tem de aparecer no prompt (trecho e pergunta).
     #[serde(default)]
     ground_numbers: bool,
+    /// true: num prompt de leitura, resposta sem apoio no trecho vira recusa (`grounding::support`).
+    #[serde(default)]
+    check_support: bool,
 }
 fn default_stop_at_end() -> bool {
     true
@@ -159,8 +166,18 @@ fn complete(model: &Model, req: &Generate) -> Result<Value, Error> {
         },
         None => (raw.clone(), Value::Null),
     };
+    let support = (req.check_support && tool.is_null())
+        .then(|| grounding::reading_parts(&req.prompt))
+        .flatten()
+        .map(|(passage, question)| grounding::support(passage, question, &text));
+    let unsupported = support.is_some_and(|s| s < MIN_SUPPORT);
+    let text = if unsupported {
+        UNSUPPORTED.to_owned()
+    } else {
+        text
+    };
     Ok(
-        json!({"text":text,"raw_text":raw,"tool":tool,"token_ids":&tokens[n..end],"prompt_tokens":n,"context_tokens":model.config.block_size,"prompt_truncated":n>model.config.block_size,"generated_tokens":end-n,"ground_numbers":req.ground_numbers,"valid_utf8":valid_utf8,"model":"katsu-native","grounded":false,"temperature":req.temperature,"repetition_penalty":req.repetition_penalty,"finish_reason":if stopped {"stop"} else {"length"}}),
+        json!({"text":text,"raw_text":raw,"tool":tool,"token_ids":&tokens[n..end],"prompt_tokens":n,"context_tokens":model.config.block_size,"prompt_truncated":n>model.config.block_size,"generated_tokens":end-n,"ground_numbers":req.ground_numbers,"support":support,"unsupported":unsupported,"valid_utf8":valid_utf8,"model":"katsu-native","grounded":false,"temperature":req.temperature,"repetition_penalty":req.repetition_penalty,"finish_reason":if stopped {"stop"} else {"length"}}),
     )
 }
 
@@ -234,6 +251,7 @@ async fn rag_ask(
         seed: 0,
         stop_at_end: true,
         ground_numbers: true,
+        check_support: true,
     };
     validate(&req)?;
     let permit = model
@@ -262,6 +280,7 @@ async fn rag_ask(
         "fallback_used": fallback_used, "response_mode": "source_quote",
         "fallback_reason": if fallback_used { Some("generation_differs_from_complete_source") } else { None },
         "prompt_tokens": out["prompt_tokens"], "ground_numbers": true,
+        "model_raw_text": out["raw_text"], "support": out["support"], "unsupported": out["unsupported"],
         "prompt_truncated": out["prompt_truncated"]
     })))
 }
