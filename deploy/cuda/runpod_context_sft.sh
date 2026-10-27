@@ -14,12 +14,14 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 DATA=${DATA:-mix_context_general_v2}
+# pasta do modelo de partida (config.json e tokenizer.bpe vêm no data.tar.gz; o model.ckpt, em /root/up)
+BASE=${BASE:-runs/pretrain-1b-base}
 OUTPUT=${OUTPUT:-runs/gpu-context-sft-v2}
 LR=${LR:-0.0003}
 BATCH=${BATCH:-64}
 (cd /root/up && sha256sum -c SHA256SUMS)
 tar -xzf /root/up/data.tar.gz
-cp /root/up/model.ckpt runs/pretrain-1b-base/model.ckpt
+cp /root/up/model.ckpt "$BASE/model.ckpt"
 [[ -e "$OUTPUT" ]] && { echo "$OUTPUT já existe" >&2; exit 1; }
 if ! command -v cargo >/dev/null && [[ ! -x "$HOME/.cargo/bin/cargo" ]]; then
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.88.0
@@ -33,7 +35,7 @@ steps=$(( (train + BATCH - 1) / BATCH ))
 echo "SFT: $train exemplos, 1 época, batch $BATCH = $steps passos, lr $LR -> $OUTPUT"
 export KATSU_ENGINE=gpu KATSU_GEMM=tf32 KATSU_BACKEND=cuda KATSU_BATCH="$BATCH" KATSU_EVAL_SAMPLES=1000
 export KATSU_CHECKPOINT_EVERY=100 KATSU_MEMORY_BUDGET_MIB=16384
-target/release/train_sft runs/pretrain-1b-base "data/sft/$DATA.train.jsonl" "data/sft/$DATA.eval.jsonl" \
+target/release/train_sft "$BASE" "data/sft/$DATA.train.jsonl" "data/sft/$DATA.eval.jsonl" \
   "data/sft/$DATA.train.jsonl" "$OUTPUT" "$steps" 0 "$LR"
 (cd "$OUTPUT" && sha256sum model.ckpt config.json tokenizer.bpe sft-report.json metrics.jsonl > SHA256SUMS)
 echo "pronto: $OUTPUT/sft-report.json"

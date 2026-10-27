@@ -5,10 +5,21 @@ use axum::{
     Json, Router,
 };
 use katsu_core::{load_params, BpeTokenizer, GenerationOptions, KatsuLmConfig, Tensor};
+use katsu_rag::{Document, Index};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::{fs::File, path::PathBuf, sync::Arc};
+use std::{
+    fs::File,
+    io::Write,
+    path::PathBuf,
+    sync::{Arc, RwLock},
+};
 use tokio::sync::Semaphore;
+mod calc;
+/// Sistema do formato de leitura (o mesmo do SFT de leitura e da régua de leitura).
+const READING_SYSTEM: &str = "Você é o Arandu. Responda em português do Brasil usando só o trecho.";
+const NO_DATA: &str = "Não tenho dados suficientes nos documentos para responder.";
+const MAX_DOCUMENT_CHARS: usize = 200_000;
 /// Mesmos tetos do treinador (train_sft); cobrem o perfil 134M (12×768, 12 heads, contexto 256).
 const MAX_EMBED_DIM: usize = 1024;
 const MAX_LAYERS: usize = 24;
@@ -22,6 +33,9 @@ struct Model {
     params: Vec<Tensor>,
     tokenizer: BpeTokenizer,
     gate: Arc<Semaphore>,
+    /// Biblioteca do RAG; `rag_path` (KATSU_RAG_DOCS) guarda os documentos em JSONL.
+    rag: RwLock<Index>,
+    rag_path: Option<PathBuf>,
 }
 #[derive(Deserialize)]
 struct Generate {
@@ -54,10 +68,7 @@ type Error = (StatusCode, Json<Value>);
 fn error(code: StatusCode, message: &str) -> Error {
     (code, Json(json!({"error":message})))
 }
-async fn generate(
-    State(model): State<Arc<Model>>,
-    Json(req): Json<Generate>,
-) -> Result<Json<Value>, Error> {
+fn validate(req: &Generate) -> Result<(), Error> {
     if req.prompt.trim().is_empty()
         || req.prompt.len() > 16384
         || req.max_new_tokens == 0
@@ -72,27 +83,191 @@ async fn generate(
             &format!("invalid prompt, max_new_tokens (1..{MAX_NEW_TOKENS}), temperature (0..2), or repetition_penalty (1..2)"),
         ));
     }
+    Ok(())
+}
+
+/// Gera a continuação e aplica a ferramenta de cálculo: se o modelo respondeu só `[CALC: …]`, o
+/// texto vira "expressão = resultado" (ou o erro do cálculo) e a chamada fica em `tool`.
+fn complete(model: &Model, req: &Generate) -> Result<Value, Error> {
+    let ids = model.tokenizer.encode(&req.prompt);
+    let n = ids.len();
+    let stop = model
+        .tokenizer
+        .special_token_id("<|end|>")
+        .map(|id| vec![id])
+        .unwrap_or_else(|| model.tokenizer.encode("\n<|end|>"));
+    let options = GenerationOptions {
+        temperature: req.temperature,
+        repetition_penalty: req.repetition_penalty,
+        seed: req.seed,
+        stop_tokens: if req.stop_at_end {
+            stop.clone()
+        } else {
+            Vec::new()
+        },
+    };
+    let tokens = model
+        .config
+        .generate_with_options(&model.params, &ids, req.max_new_tokens, &options)
+        .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    let stopped = req.stop_at_end && tokens[n..].ends_with(&stop);
+    let end = if stopped {
+        tokens.len() - stop.len()
+    } else {
+        tokens.len()
+    };
+    let bytes = model
+        .tokenizer
+        .decode_bytes(&tokens[n..end])
+        .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    let valid_utf8 = std::str::from_utf8(&bytes).is_ok();
+    let raw = String::from_utf8_lossy(&bytes).into_owned();
+    let (text, tool) = match calc::call(&raw) {
+        Some(expr) => match calc::eval(expr) {
+            Ok(v) => (
+                format!("{expr} = {}", calc::format(v)),
+                json!({"name":"calc","input":expr,"output":calc::format(v)}),
+            ),
+            Err(why) => (
+                format!("Não consegui calcular {expr}: {why}."),
+                json!({"name":"calc","input":expr,"error":why}),
+            ),
+        },
+        None => (raw.clone(), Value::Null),
+    };
+    Ok(
+        json!({"text":text,"raw_text":raw,"tool":tool,"token_ids":&tokens[n..end],"prompt_tokens":n,"context_tokens":model.config.block_size,"prompt_truncated":n>model.config.block_size,"generated_tokens":end-n,"valid_utf8":valid_utf8,"model":"katsu-native","grounded":false,"temperature":req.temperature,"repetition_penalty":req.repetition_penalty,"finish_reason":if stopped {"stop"} else {"length"}}),
+    )
+}
+
+async fn generate(
+    State(model): State<Arc<Model>>,
+    Json(req): Json<Generate>,
+) -> Result<Json<Value>, Error> {
+    validate(&req)?;
     let permit = model
         .gate
         .clone()
         .try_acquire_owned()
         .map_err(|_| error(StatusCode::TOO_MANY_REQUESTS, "model busy"))?;
     tokio::task::spawn_blocking(move || {
-  let _permit=permit;
-  let ids=model.tokenizer.encode(&req.prompt);let n=ids.len();
-  let stop=model.tokenizer.special_token_id("<|end|>").map(|id|vec![id]).unwrap_or_else(||model.tokenizer.encode("\n<|end|>"));
-  let options=GenerationOptions{temperature:req.temperature,repetition_penalty:req.repetition_penalty,seed:req.seed,stop_tokens:if req.stop_at_end {stop.clone()} else {Vec::new()}};
-  let tokens=model.config.generate_with_options(&model.params,&ids,req.max_new_tokens,&options).map_err(|e|error(StatusCode::INTERNAL_SERVER_ERROR,&e.to_string()))?;
-  let stopped=req.stop_at_end&&tokens[n..].ends_with(&stop);
-  let end=if stopped {tokens.len()-stop.len()} else {tokens.len()};
-  let bytes=model.tokenizer.decode_bytes(&tokens[n..end]).map_err(|e|error(StatusCode::INTERNAL_SERVER_ERROR,&e.to_string()))?;
-  let valid_utf8=std::str::from_utf8(&bytes).is_ok();
-  Ok(Json(json!({"text":String::from_utf8_lossy(&bytes),"token_ids":&tokens[n..end],"prompt_tokens":n,"context_tokens":model.config.block_size,"prompt_truncated":n>model.config.block_size,"generated_tokens":end-n,"valid_utf8":valid_utf8,"model":"katsu-native","grounded":false,"temperature":req.temperature,"repetition_penalty":req.repetition_penalty,"finish_reason":if stopped {"stop"} else {"length"}})))
- }).await.map_err(|_|error(StatusCode::INTERNAL_SERVER_ERROR,"generation worker failed"))?
+        let _permit = permit;
+        complete(&model, &req).map(Json)
+    })
+    .await
+    .map_err(|_| {
+        error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "generation worker failed",
+        )
+    })?
 }
+
+#[derive(Deserialize)]
+struct Ask {
+    question: String,
+    #[serde(default = "default_ask_tokens")]
+    max_new_tokens: usize,
+}
+fn default_ask_tokens() -> usize {
+    80
+}
+
+/// RAG: acha o melhor trecho da biblioteca e pergunta ao modelo no formato de leitura. Sem trecho
+/// relevante, responde que não há dados, sem chamar o modelo (não inventa).
+async fn rag_ask(
+    State(model): State<Arc<Model>>,
+    Json(ask): Json<Ask>,
+) -> Result<Json<Value>, Error> {
+    if ask.question.trim().is_empty() || ask.question.len() > 2000 {
+        return Err(error(StatusCode::BAD_REQUEST, "invalid question"));
+    }
+    let hits: Vec<Value> = {
+        let index = model
+            .rag
+            .read()
+            .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "rag index poisoned"))?;
+        index
+            .search(&ask.question, 3)
+            .into_iter()
+            .map(|h| json!({"doc":h.chunk.doc,"title":h.chunk.title,"text":h.chunk.text,"score":h.score}))
+            .collect()
+    };
+    let Some(best) = hits.first() else {
+        return Ok(Json(
+            json!({"answer":NO_DATA,"sources":[],"used_model":false}),
+        ));
+    };
+    let req = Generate {
+        prompt: format!(
+            "<|system|>{READING_SYSTEM}\n<|user|>Trecho: {}\nPergunta: {}\n<|assistant|>",
+            best["text"].as_str().unwrap_or_default(),
+            ask.question.trim()
+        ),
+        max_new_tokens: ask.max_new_tokens,
+        temperature: 0.0,
+        repetition_penalty: default_penalty(),
+        seed: 0,
+        stop_at_end: true,
+    };
+    validate(&req)?;
+    let permit = model
+        .gate
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| error(StatusCode::TOO_MANY_REQUESTS, "model busy"))?;
+    let out = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        complete(&model, &req)
+    })
+    .await
+    .map_err(|_| {
+        error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "generation worker failed",
+        )
+    })??;
+    Ok(Json(
+        json!({"answer":out["text"],"sources":hits,"used_model":true,"prompt_tokens":out["prompt_tokens"]}),
+    ))
+}
+
+/// Adiciona um documento à biblioteca (e ao arquivo, se KATSU_RAG_DOCS estiver definido).
+async fn rag_add(
+    State(model): State<Arc<Model>>,
+    Json(doc): Json<Document>,
+) -> Result<Json<Value>, Error> {
+    if doc.id.trim().is_empty()
+        || doc.text.trim().is_empty()
+        || doc.text.chars().count() > MAX_DOCUMENT_CHARS
+    {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            &format!("document needs id and text (up to {MAX_DOCUMENT_CHARS} chars)"),
+        ));
+    }
+    if let Some(path) = &model.rag_path {
+        let line = serde_json::to_string(&doc)
+            .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        writeln!(file, "{line}")
+            .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    }
+    let mut index = model
+        .rag
+        .write()
+        .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "rag index poisoned"))?;
+    index.add(&doc);
+    Ok(Json(json!({"chunks":index.len()})))
+}
+
 async fn health(State(m): State<Arc<Model>>) -> Json<Value> {
     Json(
-        json!({"status":"ok","backend":"cpu","parameters":m.config.param_count(),"context_tokens":m.config.block_size,"vocab_size":m.config.vocab_size,"end_token_id":m.tokenizer.special_token_id("<|end|>"),"max_new_tokens":MAX_NEW_TOKENS}),
+        json!({"status":"ok","backend":"cpu","parameters":m.config.param_count(),"context_tokens":m.config.block_size,"vocab_size":m.config.vocab_size,"end_token_id":m.tokenizer.special_token_id("<|end|>"),"max_new_tokens":MAX_NEW_TOKENS,"rag_chunks":m.rag.read().map(|i| i.len()).unwrap_or(0),"tools":["calc"]}),
     )
 }
 fn supported(c: &KatsuLmConfig) -> Result<(), String> {
@@ -193,15 +368,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.param_count(),
         config.block_size
     );
+    // KATSU_RAG_DOCS: biblioteca em JSONL ({"id","title","text"} por linha), lida aqui e acrescida
+    // pelo POST /rag/documents. KATSU_RAG_CHUNK: tamanho máximo do trecho em caracteres (320 cabe
+    // no contexto de 256 tokens com a pergunta e a resposta).
+    let chunk: usize = std::env::var("KATSU_RAG_CHUNK")
+        .unwrap_or_else(|_| "320".into())
+        .parse()?;
+    let mut rag = Index::new(chunk);
+    let rag_path = std::env::var("KATSU_RAG_DOCS")
+        .ok()
+        .filter(|p| !p.is_empty())
+        .map(PathBuf::from);
+    if let Some(path) = rag_path.as_ref().filter(|p| p.exists()) {
+        let docs = rag.load_jsonl(&std::fs::read_to_string(path)?)?;
+        eprintln!("RAG: {docs} documentos, {} trechos", rag.len());
+    }
     let app = Router::new()
         .route("/health", get(health))
         .route("/generate", post(generate))
+        .route("/rag/ask", post(rag_ask))
         .layer(DefaultBodyLimit::max(32768))
+        .route(
+            "/rag/documents",
+            post(rag_add).layer(DefaultBodyLimit::max(1 << 20)),
+        )
         .with_state(Arc::new(Model {
             config,
             params,
             tokenizer,
             gate: Arc::new(Semaphore::new(1)),
+            rag: RwLock::new(rag),
+            rag_path,
         }));
     // KATSU_HOST=0.0.0.0 só dentro de container/rede privada: o servidor não tem autenticação.
     let host: std::net::IpAddr = std::env::var("KATSU_HOST")
