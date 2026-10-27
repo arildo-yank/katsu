@@ -5,7 +5,7 @@ chaves, perguntas e valores próprios: nenhum caso do benchmark entra no treino 
 
   python3 scripts/build_context_sft.py --count 12000 --out data/sft/context_arandu
 
-v2: valores copiados literalmente e nomes de campo gerados ao acaso (ver generic_field).
+v3: nomes de campo de um vocabulário de ~5.000 palavras da Wikipedia (load_vocab). v2: valores copiados literalmente e nomes de campo gerados ao acaso (ver generic_field).
 
 Saída: <out>.train.jsonl, <out>.eval.jsonl (5%) e <out>.manifest.json. Sintético, determinístico
 (semente fixa), sem API externa: a licença é a deste repositório.
@@ -193,6 +193,8 @@ def no_data(r, what):
 def example(r, kind):
     if kind.endswith("_generic"):
         return generic_example(r, kind)
+    if kind.endswith("_vocab"):
+        return vocab_example(r, kind)
     domain = r.choice(list(DOMAINS))
     if kind == "copy":
         chosen, ctx = sample_fields(r, domain, r.randint(1, 4))
@@ -308,8 +310,58 @@ def generic_example(r, kind):
     raise ValueError(kind)
 
 
-MIX = [("copy", 0.18), ("summary", 0.06), ("copy_generic", 0.26), ("summary_generic", 0.08), ("missing", 0.16),
-       ("judgment", 0.08), ("pii", 0.1), ("injection", 0.08)]
+# v3: nomes de campo tirados do vocabulário do corpus de validação da Wikipedia (milhares de palavras),
+# para o modelo aprender a regra "a pergunta cita a palavra do campo; copie o valor", não uma lista.
+VOCAB = []
+
+
+def load_vocab(path: Path, banned: set[str], size: int = 5000) -> list[str]:
+    import re
+    from collections import Counter
+    counts = Counter()
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            counts.update(re.findall(r"\b[a-záéíóúâêôãõç]{4,14}\b", json.loads(line)["text"]))
+    ranked = [w for w, n in counts.most_common() if n >= 3]
+    # as ~300 mais frequentes são palavras de função (para, como, sobre...); ficam de fora
+    words = [w for w in ranked[300:] if not any(b in w for b in banned)]
+    return sorted(words[:size])
+
+
+def vocab_field(r):
+    word = r.choice(VOCAB)
+    if r.random() < 0.3:
+        u, unit = r.choice(UNITS_ALL)
+        key = f"{word}_{u}"
+    else:
+        key, unit = word, ""
+    value = r.randint(0, 9999) if r.random() < 0.7 else (round(r.uniform(0, 999), 1) if r.random() < 0.6 else f"{r.randint(0, 9)} a {r.randint(0, 9)}")
+    return key, word, value, unit
+
+
+def vocab_example(r, kind):
+    fields, ctx = [], {}
+    while len(fields) < r.randint(1, 4) or not fields:
+        f = vocab_field(r)
+        if f[0] not in ctx:
+            ctx[f[0]] = f[2]
+            fields.append(f)
+    if kind == "copy_vocab":
+        key, word, value, unit = r.choice(fields)
+        q = r.choice([f"Qual foi {word} registrado?", f"Qual o valor de {word}?", f"Quanto foi registrado em {word}?",
+                      f"O que o contexto informa sobre {word}?", f"Qual é o {word}?", f"Qual é a {word}?"])
+        if unit in ("minutos", "segundos", "horas", "dias", "metros", "litros") and r.random() < 0.5:
+            q = f"Quantos {unit} de {word} foram registrados?"
+        return ctx, q, r.choice([f"{word.capitalize()}: {literal(value, unit)}.", f"O contexto informa {literal(value, unit)} em {key}.",
+                                 f"Foi registrado {literal(value, unit)} ({key})."])
+    q = r.choice(["Resuma o que foi registrado sem inventar.", "Liste os valores do contexto.", "Resuma os dados sem acrescentar nada."])
+    return ctx, q, " ".join(f"{k}: {literal(v, u)}." for k, _, v, u in fields)
+
+
+UNITS_ALL = [u for _, _, units in QUANTITIES for u in units]
+
+MIX = [("copy", 0.12), ("summary", 0.04), ("copy_generic", 0.14), ("summary_generic", 0.04), ("copy_vocab", 0.22),
+       ("summary_vocab", 0.06), ("missing", 0.14), ("judgment", 0.08), ("pii", 0.09), ("injection", 0.07)]
 
 
 def row(i, kind, ctx, question, response):
@@ -321,10 +373,11 @@ def row(i, kind, ctx, question, response):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("--count", type=int, default=20000)
+    p.add_argument("--count", type=int, default=24000)
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--bench", type=Path, default=Path(__file__).resolve().parents[2] / "ARANDU/katsu_native/benchmarks/arandubench.jsonl")
-    p.add_argument("--seed", type=int, default=2028)
+    p.add_argument("--seed", type=int, default=2029)
+    p.add_argument("--vocab", type=Path, default=Path(__file__).resolve().parents[1] / "data/pretrain/val.jsonl")
     a = p.parse_args(argv)
     r = random.Random(a.seed)
     kinds, weights = zip(*MIX)
@@ -335,6 +388,9 @@ def main(argv=None):
     # as chaves do benchmark (placar, minutos, salto_cm...) nunca aparecem num contexto de treino;
     # dados pessoais (cpf, email) são a exceção: recusá-los é o comportamento a ensinar
     bench_keys = {k for c in bench for k in c["context"]} - {"cpf", "email"}
+    # nenhuma palavra das chaves do benchmark entra no vocabulário de campos (placar, minutos, salto...)
+    banned = {part for k in bench_keys for part in k.split("_") if len(part) >= 4} | {"prontid", "acwr"}
+    VOCAB[:] = load_vocab(a.vocab, banned)
     rows, seen, skipped = [], set(), 0
     while len(rows) < a.count:
         kind = r.choices(kinds, weights)[0]
@@ -360,7 +416,7 @@ def main(argv=None):
         Path(f"{a.out}.{name}.jsonl").write_text("".join(json.dumps(x, ensure_ascii=False) + "\n" for x in data))
     counts = {k: sum(x["kind"] == k for x in rows) for k in kinds}
     manifest = {"generator": "scripts/build_context_sft.py", "seed": a.seed, "system": SYSTEM, "train": len(train),
-                "eval": len(val), "kinds": counts, "skipped_bench_overlap": skipped, "domains": sorted(DOMAINS), "license": "sintético, deste repositório",
+                "eval": len(val), "kinds": counts, "skipped_bench_overlap": skipped, "field_vocab": len(VOCAB), "domains": sorted(DOMAINS), "license": "sintético, deste repositório",
                 "benchmark_checked": str(a.bench), "benchmark_sha256": hashlib.sha256(a.bench.read_bytes()).hexdigest()}
     Path(f"{a.out}.manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
     print(json.dumps(manifest, ensure_ascii=False))
