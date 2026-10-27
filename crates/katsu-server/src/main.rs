@@ -16,6 +16,7 @@ use std::{
 };
 use tokio::sync::Semaphore;
 mod calc;
+mod grounding;
 /// Sistema do formato de leitura (o mesmo do SFT de leitura e da régua de leitura).
 const READING_SYSTEM: &str = "Você é o Arandu. Responda em português do Brasil usando só o trecho.";
 const NO_DATA: &str = "Não tenho dados suficientes nos documentos para responder.";
@@ -32,6 +33,8 @@ struct Model {
     config: KatsuLmConfig,
     params: Vec<Tensor>,
     tokenizer: BpeTokenizer,
+    /// Texto de cada token (com perdas em UTF-8 partido), para a decodificação restrita.
+    token_text: Vec<String>,
     gate: Arc<Semaphore>,
     /// Biblioteca do RAG; `rag_path` (KATSU_RAG_DOCS) guarda os documentos em JSONL.
     rag: RwLock<Index>,
@@ -51,6 +54,9 @@ struct Generate {
     /// false gera exatamente max_new_tokens, ignorando <|end|>: medição de velocidade.
     #[serde(default = "default_stop_at_end")]
     stop_at_end: bool,
+    /// true: todo número da resposta tem de aparecer no prompt (trecho e pergunta).
+    #[serde(default)]
+    ground_numbers: bool,
 }
 fn default_stop_at_end() -> bool {
     true
@@ -106,9 +112,26 @@ fn complete(model: &Model, req: &Generate) -> Result<Value, Error> {
             Vec::new()
         },
     };
+    let guard = req
+        .ground_numbers
+        .then(|| grounding::NumberGuard::new(&req.prompt));
+    let mut allow = |done: &[usize], next: usize| match &guard {
+        None => true,
+        Some(g) => {
+            let mut text: String = done.iter().map(|&t| model.token_text[t].as_str()).collect();
+            text.push_str(&model.token_text[next]);
+            g.allows(&text)
+        }
+    };
     let tokens = model
         .config
-        .generate_with_options(&model.params, &ids, req.max_new_tokens, &options)
+        .generate_filtered(
+            &model.params,
+            &ids,
+            req.max_new_tokens,
+            &options,
+            &mut allow,
+        )
         .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
     let stopped = req.stop_at_end && tokens[n..].ends_with(&stop);
     let end = if stopped {
@@ -136,7 +159,7 @@ fn complete(model: &Model, req: &Generate) -> Result<Value, Error> {
         None => (raw.clone(), Value::Null),
     };
     Ok(
-        json!({"text":text,"raw_text":raw,"tool":tool,"token_ids":&tokens[n..end],"prompt_tokens":n,"context_tokens":model.config.block_size,"prompt_truncated":n>model.config.block_size,"generated_tokens":end-n,"valid_utf8":valid_utf8,"model":"katsu-native","grounded":false,"temperature":req.temperature,"repetition_penalty":req.repetition_penalty,"finish_reason":if stopped {"stop"} else {"length"}}),
+        json!({"text":text,"raw_text":raw,"tool":tool,"token_ids":&tokens[n..end],"prompt_tokens":n,"context_tokens":model.config.block_size,"prompt_truncated":n>model.config.block_size,"generated_tokens":end-n,"ground_numbers":req.ground_numbers,"valid_utf8":valid_utf8,"model":"katsu-native","grounded":false,"temperature":req.temperature,"repetition_penalty":req.repetition_penalty,"finish_reason":if stopped {"stop"} else {"length"}}),
     )
 }
 
@@ -209,6 +232,7 @@ async fn rag_ask(
         repetition_penalty: default_penalty(),
         seed: 0,
         stop_at_end: true,
+        ground_numbers: true,
     };
     validate(&req)?;
     let permit = model
@@ -353,6 +377,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("tokenizer/config mismatch".into());
     }
     let params = load_params(&mut File::open(run.join("model.ckpt"))?)?;
+    let token_text = (0..tokenizer.vocab_size())
+        .map(|id| {
+            tokenizer
+                .decode_bytes(&[id])
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
+        })
+        .collect::<std::io::Result<Vec<_>>>()?;
     // Compara só shapes: config.init() alocaria uma segunda cópia do modelo (~540 MB no 134M).
     let expected = expected_shapes(&config);
     if params.len() != expected.len()
@@ -395,6 +426,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_state(Arc::new(Model {
             config,
             params,
+            token_text,
             tokenizer,
             gate: Arc::new(Semaphore::new(1)),
             rag: RwLock::new(rag),

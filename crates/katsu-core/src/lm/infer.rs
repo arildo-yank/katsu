@@ -277,4 +277,39 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn filtered_generation_never_emits_vetoed_tokens() {
+        let (config, params) = model();
+        let options = crate::GenerationOptions {
+            temperature: 0.8,
+            repetition_penalty: 1.0,
+            seed: 3,
+            stop_tokens: vec![],
+        };
+        let even = config
+            .generate_filtered(&params, &[1, 2], 20, &options, &mut |_, t| t % 2 == 0)
+            .unwrap();
+        assert_eq!(even.len(), 22);
+        assert!(even[2..].iter().all(|t| t % 2 == 0), "{even:?}");
+        // Sem filtro, o mesmo caminho dá o mesmo que generate_with_options.
+        let all = config
+            .generate_filtered(&params, &[1, 2], 20, &options, &mut |_, _| true)
+            .unwrap();
+        assert_eq!(
+            all,
+            config
+                .generate_with_options(&params, &[1, 2], 20, &options)
+                .unwrap()
+        );
+        // Tudo vetado: com stop_tokens, para neles em vez de travar.
+        let stop = crate::GenerationOptions {
+            stop_tokens: vec![0],
+            ..options
+        };
+        let out = config
+            .generate_filtered(&params, &[1, 2], 20, &stop, &mut |_, _| false)
+            .unwrap();
+        assert_eq!(out, vec![1, 2, 0]);
+    }
 }

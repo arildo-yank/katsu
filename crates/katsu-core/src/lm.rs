@@ -532,6 +532,22 @@ impl KatsuLmConfig {
         count: usize,
         options: &GenerationOptions,
     ) -> Result<Vec<usize>> {
+        self.generate_filtered(params, prompt, count, options, &mut |_, _| true)
+    }
+
+    /// Como `generate_with_options`, mas `allow(gerados, candidato)` pode vetar tokens: o vetado
+    /// sai da distribuição e a amostragem se repete (decodificação restrita). Se `allow` vetar
+    /// `MAX_VETOES` candidatos seguidos, o passo para em `stop_tokens` (ou, sem eles, aceita o
+    /// último candidato), para nunca travar.
+    pub fn generate_filtered(
+        &self,
+        params: &[Tensor],
+        prompt: &[usize],
+        count: usize,
+        options: &GenerationOptions,
+        allow: &mut dyn FnMut(&[usize], usize) -> bool,
+    ) -> Result<Vec<usize>> {
+        const MAX_VETOES: usize = 512;
         if prompt.is_empty() || !options.temperature.is_finite() {
             return Err(TensorError::InvalidShape(
                 "nonempty prompt and finite temperature required",
@@ -555,7 +571,21 @@ impl KatsuLmConfig {
             let seen = start + cache.len();
             let mut last = self.forward_cached(params, &mut cache, &tokens[seen..])?;
             penalize_repetitions(&mut last, &tokens[start..], options.repetition_penalty)?;
-            tokens.push(sample(&last, options.temperature, rng.uniform()));
+            let mut next = sample(&last, options.temperature, rng.uniform());
+            let mut vetoes = 0;
+            while !allow(&tokens[prompt.len()..], next) {
+                vetoes += 1;
+                if vetoes >= MAX_VETOES {
+                    if !options.stop_tokens.is_empty() {
+                        tokens.extend_from_slice(&options.stop_tokens);
+                        return Ok(tokens);
+                    }
+                    break;
+                }
+                last[next] = f32::NEG_INFINITY;
+                next = sample(&last, options.temperature, rng.uniform());
+            }
+            tokens.push(next);
             if !options.stop_tokens.is_empty()
                 && tokens[prompt.len()..].ends_with(&options.stop_tokens)
             {
