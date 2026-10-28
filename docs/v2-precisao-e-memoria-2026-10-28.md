@@ -50,3 +50,63 @@ proibitivo para testes. O ganho de BF16 (velocidade nos Tensor Cores e metade da
 ativações) só pode ser medido com kernels CUDA, que não existem.
 
 Teste automático (roda no hook): `tests/bf16.rs`, modelo pequeno, 8 passos, tolerância de 1%.
+
+## 2. Memória para 1B: Adam de 8 bits e recomputação de ativações
+
+O BF16 sozinho não faz o 1B caber numa RTX 4090 (24 GB): com pesos-mestre e Adam em FP32, o
+estado continua em ~16 bytes/parâmetro. Entraram as duas opções mais baratas que rodam e se
+testam no Mac:
+
+- `Adam8bit`: momentos em 8 bits por blocos de 256, com uma escala FP32 por bloco e compansão
+  por raiz quadrada (mais resolução perto de zero). Estado: **2,03 bytes/parâmetro** (medido
+  com `state_bytes()`), contra 8 do Adam FP32. A conta do passo é FP32.
+- `KatsuLmConfig::loss_backward_recompute`: guarda só a entrada de cada camada; o backward
+  refaz uma camada por vez. Custa um forward a mais.
+
+O Adam na RAM do host não entrou: na CPU não muda nada (já é tudo host) e, sem GPU, não há
+como testar o ganho no dispositivo. Fica como alternativa para o executor CUDA.
+
+Testes no hook (`tests/v2_memory.rs`): a recomputação dá a mesma perda (1e-6) e os mesmos
+gradientes (1e-4 da escala) que o backward normal; o Adam de 8 bits fica a 3% da perda do Adam
+FP32 em 25 passos, e os dois caem mais de 30%.
+
+### Medida no Mac (batch 4 × 256, FP32, Accelerate, 4 passos)
+
+`KATSU_OPTIM={adam|adam8} KATSU_RECOMPUTE={0|1} v2_step fp32 D CAMADAS CABEÇAS 32004 256 4 4`
+
+| Modelo | Otimizador | Recomputação | Pico do processo | Pico / parâmetro | s/passo |
+|---|---|---|---|---|---|
+| 58M (512 × 8) | Adam FP32 | não | 1.502 MB | 25,9 B | 0,92 |
+| 58M | Adam FP32 | sim | 1.147 MB | 19,7 B | 0,99 |
+| 58M | Adam 8 bits | não | 977 MB | 16,8 B | 0,85 |
+| 58M | Adam 8 bits | sim | **561 MB** | **9,7 B** | 1,03 |
+| 134M (768 × 12) | Adam FP32 | não | 3.006 MB | 22,4 B | 2,59 |
+| 134M | Adam FP32 | sim | 2.289 MB | 17,0 B | 3,10 |
+| 134M | Adam 8 bits | não | 1.927 MB | 14,3 B | 2,60 |
+| 134M | Adam 8 bits | sim | **1.488 MB** | **11,1 B** | 3,33 |
+
+As perdas dos quatro modos, em cada tamanho, coincidiram nas duas primeiras casas decimais nos
+4 passos. "Pico / parâmetro" inclui ativações, logits e o processo; é um teto, não o estado.
+
+Leitura: o estado medido é pesos FP32 (4) + gradientes FP32 (4) + Adam 8 bits (2,03) =
+**10,03 bytes/parâmetro**; o resto do pico do 134M com recomputação (~140 MB) são ativações e
+logits. Sem recomputação, as ativações medidas foram ~0,39 MB/token no 58M e ~0,57 MB/token no
+134M. A recomputação custou 7–28% a mais de tempo por passo.
+
+### Extrapolação para 1B (estimativa, não medida)
+
+Configuração de referência: d = 2048, 18 camadas, 16 cabeças, vocabulário 32.000, contexto
+1.024: **1.039.474.688 parâmetros**.
+
+| Arranjo | Bytes/parâmetro | Estado do 1B |
+|---|---|---|
+| Adam FP32, pesos e gradientes FP32 (hoje) | 16 | 16,6 GB |
+| Adam 8 bits, pesos-mestre e gradientes FP32 (medido acima) | 10,03 | 10,4 GB |
+| GPU: o mesmo + cópia BF16 dos pesos | 12,03 | 12,5 GB |
+| GPU: só pesos e gradientes BF16 no dispositivo, mestre e Adam no host | 4 | 4,2 GB |
+
+Na 4090 sobram ~11 GB para ativações no arranjo de 12 bytes/parâmetro. Com recomputação, o
+maior consumo deixa de ser o grafo das camadas e passa a ser os logits (batch × contexto ×
+32.000 × 4 bytes: ~1 GB para 8 × 1.024, mais o gradiente) e a atenção sem fusão (matrizes
+T × T por cabeça). **Estimativa:** cabe com batch pequeno. Só uma medida na GPU confirma, e o
+`GpuTrainer` ainda não tem BF16, Adam 8 bits nem recomputação.

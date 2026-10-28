@@ -400,50 +400,146 @@ impl KatsuLmConfig {
         t: usize,
         backend: Arc<dyn Backend>,
     ) -> Result<Tensor> {
+        for layer in 0..self.layers {
+            x = self.block(params, layer, &x, batch, t, &backend)?;
+        }
+        self.head(params, &x, batch, t, &backend)
+    }
+
+    /// Uma camada do transformer: atenção e MLP, cada um com LayerNorm antes e resíduo.
+    fn block(
+        &self,
+        params: &[Tensor],
+        layer: usize,
+        x: &Tensor,
+        batch: usize,
+        t: usize,
+        backend: &Arc<dyn Backend>,
+    ) -> Result<Tensor> {
         let add = |a: &Tensor, b: &Tensor| a.add_with_backend(b, backend.clone());
         let dh = self.embed_dim / self.heads;
         let mm = |a: &Tensor, b: &Tensor| a.matmul_with_backend(b, backend.clone());
-        for layer in 0..self.layers {
-            let p = &params[2 + layer * self.per_layer()..2 + (layer + 1) * self.per_layer()];
-            let h = x.layer_norm_affine(&p[LN1_G], &p[LN1_B])?;
-            // Σ_h values_h·Wo_h = [values_1 … values_H]·[Wo_1; …; Wo_H]: uma projeção só,
-            // sem guardar uma saída [B·T, d] e uma soma residual por cabeça.
-            let mut heads = Vec::with_capacity(self.heads);
-            let mut out_weights = Vec::with_capacity(self.heads);
-            let per_head = p[HEAD_START..HEAD_START + self.heads * PER_HEAD].chunks_exact(PER_HEAD);
-            // Q, K e V de todas as cabeças numa chamada: a entrada h sobe uma vez só.
-            let projections: Vec<Tensor> = per_head.clone().flat_map(|w| w[..3].to_vec()).collect();
-            let qkv = h.matmul_many_with_backend(&projections, backend.clone())?;
-            for (head, w) in per_head.enumerate() {
-                let part = |j: usize| {
-                    qkv.columns((3 * head + j) * dh, dh)?
-                        .reshape(&[batch, t, dh])
-                };
-                let (q, k, v) = (part(0)?, part(1)?, part(2)?);
-                let attention = q.causal_attention_with_backend(&k, backend.clone())?;
-                heads.push(
-                    attention
-                        .bmm_with_backend(&v, backend.clone())?
-                        .reshape(&[batch * t, dh])?,
-                );
-                out_weights.push(w[3].clone());
-            }
-            let projection = mm(
-                &Tensor::concat(&heads, 1)?,
-                &Tensor::concat(&out_weights, 0)?,
-            )?;
-            drop(heads);
-            x = add(&x, &projection)?;
-            let p = &p[HEAD_START + self.heads * PER_HEAD..];
-            let h = x.layer_norm_affine(&p[0], &p[1])?;
-            let mlp = h
-                .linear_with_backend(&p[2], &p[3], backend.clone())?
-                .gelu()?;
-            x = add(&x, &mlp.linear_with_backend(&p[4], &p[5], backend.clone())?)?;
+        let p = &params[2 + layer * self.per_layer()..2 + (layer + 1) * self.per_layer()];
+        let h = x.layer_norm_affine(&p[LN1_G], &p[LN1_B])?;
+        // Σ_h values_h·Wo_h = [values_1 … values_H]·[Wo_1; …; Wo_H]: uma projeção só,
+        // sem guardar uma saída [B·T, d] e uma soma residual por cabeça.
+        let mut heads = Vec::with_capacity(self.heads);
+        let mut out_weights = Vec::with_capacity(self.heads);
+        let per_head = p[HEAD_START..HEAD_START + self.heads * PER_HEAD].chunks_exact(PER_HEAD);
+        // Q, K e V de todas as cabeças numa chamada: a entrada h sobe uma vez só.
+        let projections: Vec<Tensor> = per_head.clone().flat_map(|w| w[..3].to_vec()).collect();
+        let qkv = h.matmul_many_with_backend(&projections, backend.clone())?;
+        for (head, w) in per_head.enumerate() {
+            let part = |j: usize| {
+                qkv.columns((3 * head + j) * dh, dh)?
+                    .reshape(&[batch, t, dh])
+            };
+            let (q, k, v) = (part(0)?, part(1)?, part(2)?);
+            let attention = q.causal_attention_with_backend(&k, backend.clone())?;
+            heads.push(
+                attention
+                    .bmm_with_backend(&v, backend.clone())?
+                    .reshape(&[batch * t, dh])?,
+            );
+            out_weights.push(w[3].clone());
         }
+        let projection = mm(
+            &Tensor::concat(&heads, 1)?,
+            &Tensor::concat(&out_weights, 0)?,
+        )?;
+        drop(heads);
+        let x = add(x, &projection)?;
+        let p = &p[HEAD_START + self.heads * PER_HEAD..];
+        let h = x.layer_norm_affine(&p[0], &p[1])?;
+        let mlp = h
+            .linear_with_backend(&p[2], &p[3], backend.clone())?
+            .gelu()?;
+        add(&x, &mlp.linear_with_backend(&p[4], &p[5], backend.clone())?)
+    }
+
+    /// LayerNorm final e projeção para o vocabulário: logits `[batch, t, vocab]`.
+    fn head(
+        &self,
+        params: &[Tensor],
+        x: &Tensor,
+        batch: usize,
+        t: usize,
+        backend: &Arc<dyn Backend>,
+    ) -> Result<Tensor> {
         let head = &params[2 + self.layers * self.per_layer()..];
         let normalized = x.layer_norm_affine(&head[0], &head[1])?;
-        mm(&normalized, &head[2])?.reshape(&[batch, t, self.vocab_size])
+        normalized
+            .matmul_with_backend(&head[2], backend.clone())?
+            .reshape(&[batch, t, self.vocab_size])
+    }
+
+    /// Perda e backward do minibatch com recomputação de ativações (gradient checkpointing):
+    /// o forward guarda só a entrada de cada camada (`[B·T, d]`) e descarta o resto do grafo;
+    /// o backward refaz uma camada por vez, da última para a primeira, e passa o gradiente
+    /// adiante com `backward_with`. Pico de ativações: L entradas de camada + o grafo de uma
+    /// camada (ou da cabeça), em vez do grafo das L camadas. Custo: um forward a mais.
+    /// Os gradientes ficam nos parâmetros (folhas), como depois de `loss.backward()`; devolve
+    /// o valor da perda. Mesma conta de `loss_batch_with_backend` (só a ordem das somas muda).
+    pub fn loss_backward_recompute(
+        &self,
+        params: &[Tensor],
+        windows: &[&[usize]],
+        backend: Arc<dyn Backend>,
+    ) -> Result<f32> {
+        self.check_params(params)?;
+        let len = windows.first().map_or(0, |w| w.len());
+        if len < 2 || windows.iter().any(|w| w.len() != len) {
+            return Err(TensorError::InvalidShape(
+                "batch needs equal-length windows >= 2",
+            ));
+        }
+        let (batch, t) = (windows.len(), len - 1);
+        if t > self.block_size {
+            return Err(TensorError::InvalidShape("sequence exceeds block_size"));
+        }
+        let inputs: Vec<usize> = windows
+            .iter()
+            .flat_map(|w| w[..t].iter().copied())
+            .collect();
+        let targets: Vec<usize> = windows
+            .iter()
+            .flat_map(|w| w[1..].iter().copied())
+            .collect();
+        let positions: Vec<usize> = (0..inputs.len()).map(|i| i % t).collect();
+        // A entrada da camada 0 mantém o grafo dos embeddings: é pequena e leva o gradiente
+        // até as tabelas de tokens e de posições.
+        let embedded = params[0]
+            .gather_rows(&inputs)?
+            .add_with_backend(&params[1].gather_rows(&positions)?, backend.clone())?;
+        let mut checkpoints: Vec<Tensor> = Vec::with_capacity(self.layers);
+        let mut x = detach(&embedded)?;
+        for layer in 0..self.layers {
+            let out = self.block(params, layer, &x, batch, t, &backend)?;
+            checkpoints.push(x);
+            x = detach(&out)?;
+        }
+        let loss = self
+            .head(params, &x, batch, t, &backend)?
+            .reshape(&[targets.len(), self.vocab_size])?
+            .cross_entropy_with_backend(&targets, backend.clone())?;
+        let value = loss.data()[0];
+        loss.backward_release()?;
+        let mut upstream = take_grad(&x)?;
+        drop(x);
+        for layer in (0..self.layers).rev() {
+            let input = checkpoints.pop().expect("one checkpoint per layer");
+            if layer == 0 {
+                drop(input);
+                self.block(params, 0, &embedded, batch, t, &backend)?
+                    .backward_with(&upstream)?;
+                break;
+            }
+            let out = self.block(params, layer, &input, batch, t, &backend)?;
+            out.backward_with(&upstream)?;
+            drop(out);
+            upstream = take_grad(&input)?;
+        }
+        Ok(value)
     }
 
     /// Perda de minibatch retangular; uma única projeção linear para B×T tokens.
@@ -691,6 +787,18 @@ fn sample(logits: &[f32], temperature: f32, u: f32) -> usize {
         }
     }
     argmax
+}
+
+/// Folha nova com os mesmos números: o grafo de `x` fica para trás.
+fn detach(x: &Tensor) -> Result<Tensor> {
+    Tensor::new(x.data().to_vec(), x.shape())
+}
+
+fn take_grad(x: &Tensor) -> Result<Vec<f32>> {
+    x.grad()?
+        .as_ref()
+        .cloned()
+        .ok_or(TensorError::MissingGradient { index: 0 })
 }
 
 /// SplitMix64: PRNG local e reproduzível; não serve para criptografia.

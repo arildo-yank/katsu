@@ -31,6 +31,9 @@ pub use ops::LAYER_NORM_EPS;
 mod optim;
 pub use optim::{fit, step_partial, Adam, AdamStep, EpochMetrics, Optimizer, Sgd};
 
+mod adam8;
+pub use adam8::{Adam8bit, ADAM8_BLOCK};
+
 mod resident;
 pub use resident::{
     arena_len, materialize, upload, Buffer, HostParamStore, ParamStore, Transfers, View,
