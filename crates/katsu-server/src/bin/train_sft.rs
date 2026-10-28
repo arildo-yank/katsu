@@ -255,6 +255,10 @@ fn fingerprint(paths: &[&Path]) -> Result<String, Box<dyn std::error::Error>> {
     Ok(format!("{h:016x}"))
 }
 
+// Largura máxima: 2.048 cobre o 1B da V2 (docs/ARANDU_V2_PLAN.md). Os kernels percorrem a largura em
+// laços (sem tamanho fixo); a norma de camada usa 2 × d floats de memória compartilhada (16 KB em 2.048).
+const MAX_EMBED_DIM: usize = 2048;
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let wall_started = std::time::Instant::now();
     let benchmark_only = std::env::var("KATSU_BENCHMARK_ONLY").as_deref() == Ok("1");
@@ -318,7 +322,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         || old.block_size == 0
         || old.block_size > 512
         || old.embed_dim == 0
-        || old.embed_dim > 1024
+        || old.embed_dim > MAX_EMBED_DIM
         || old.layers == 0
         || old.layers > 24
         || old.heads == 0
@@ -359,7 +363,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .into());
     }
-    if old.embed_dim > 1024 || old.layers > 24 || old.vocab_size > 65536 {
+    if old.embed_dim > MAX_EMBED_DIM || old.layers > 24 || old.vocab_size > 65536 {
         return Err("SFT architecture exceeds supported bounds".into());
     }
     let mut tok = BpeTokenizer::load(&mut File::open(base.join("tokenizer.bpe"))?)?;
