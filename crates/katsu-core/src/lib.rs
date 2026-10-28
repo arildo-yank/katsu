@@ -19,6 +19,9 @@ pub use accelerate::AccelerateBackend;
 mod tensor;
 pub use tensor::{Op, Tensor, TensorError};
 
+mod bf16;
+pub use bf16::{bf16_to_f32, f32_to_bf16, matmul_bf16, round_bf16, Bf16Backend, Bf16Buffer};
+
 mod conv2d;
 pub use conv2d::Conv2D;
 
