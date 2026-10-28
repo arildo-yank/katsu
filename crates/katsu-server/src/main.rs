@@ -231,7 +231,7 @@ async fn rag_ask(
         index
             .search(&ask.question, 3)
             .into_iter()
-            .map(|h| json!({"doc":h.chunk.doc,"title":h.chunk.title,"text":h.chunk.text,"score":h.score}))
+            .map(|h| json!({"doc":h.chunk.doc,"title":h.chunk.title,"text":h.chunk.text,"score":h.score,"coverage":h.coverage}))
             .collect()
     };
     let Some(best) = hits.first() else {
@@ -283,6 +283,43 @@ async fn rag_ask(
         "model_raw_text": out["raw_text"], "support": out["support"], "unsupported": out["unsupported"],
         "prompt_truncated": out["prompt_truncated"]
     })))
+}
+
+#[derive(Deserialize)]
+struct Search {
+    question: String,
+    #[serde(default = "default_search_k")]
+    k: usize,
+}
+fn default_search_k() -> usize {
+    3
+}
+
+/// Só a busca, sem o modelo: os melhores trechos com escore e cobertura. A API do Arandu usa para
+/// decidir se a pergunta é sobre um documento da biblioteca.
+async fn rag_search(
+    State(model): State<Arc<Model>>,
+    Json(search): Json<Search>,
+) -> Result<Json<Value>, Error> {
+    if search.question.trim().is_empty()
+        || search.question.len() > 2000
+        || !(1..=10).contains(&search.k)
+    {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "invalid question or k (1..10)",
+        ));
+    }
+    let index = model
+        .rag
+        .read()
+        .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "rag index poisoned"))?;
+    let hits: Vec<Value> = index
+        .search(&search.question, search.k)
+        .into_iter()
+        .map(|h| json!({"doc":h.chunk.doc,"title":h.chunk.title,"text":h.chunk.text,"score":h.score,"coverage":h.coverage}))
+        .collect();
+    Ok(Json(json!({"hits":hits,"chunks":index.len()})))
 }
 
 /// Adiciona um documento à biblioteca (e ao arquivo, se KATSU_RAG_DOCS estiver definido).
@@ -447,6 +484,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/health", get(health))
         .route("/generate", post(generate))
         .route("/rag/ask", post(rag_ask))
+        .route("/rag/search", post(rag_search))
         .layer(DefaultBodyLimit::max(32768))
         .route(
             "/rag/documents",

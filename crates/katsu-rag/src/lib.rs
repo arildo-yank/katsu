@@ -23,6 +23,10 @@ pub struct Chunk {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Hit<'a> {
     pub score: f32,
+    /// Quanto da pergunta o trecho (com o título) cobre, de 0 a 1: a soma do IDF das palavras da
+    /// pergunta que estão no trecho sobre a soma do IDF de todas elas. Palavra rara (nome próprio)
+    /// pesa mais que palavra comum; palavra que nenhum trecho tem pesa o máximo.
+    pub coverage: f32,
     pub chunk: &'a Chunk,
 }
 
@@ -180,21 +184,26 @@ impl Index {
         let n = self.chunks.len() as f32;
         let average = self.total_length as f32 / n;
         let mut scores: HashMap<u32, f32> = HashMap::new();
+        let mut matched: HashMap<u32, f32> = HashMap::new();
+        let mut total_idf = 0.0;
         let mut seen = Vec::new();
         for term in terms(query) {
             if seen.contains(&term) {
                 continue;
             }
             let Some(list) = self.postings.get(&term) else {
+                total_idf += ((n + 0.5) / 0.5 + 1.0).ln();
                 seen.push(term);
                 continue;
             };
             let idf = ((n - list.len() as f32 + 0.5) / (list.len() as f32 + 0.5) + 1.0).ln();
+            total_idf += idf;
             for &(id, tf) in list {
                 let tf = tf as f32;
                 let length = self.lengths[id as usize] as f32;
                 let norm = tf * (K1 + 1.0) / (tf + K1 * (1.0 - B + B * length / average));
                 *scores.entry(id).or_default() += idf * norm;
+                *matched.entry(id).or_default() += idf;
             }
             seen.push(term);
         }
@@ -205,6 +214,7 @@ impl Index {
             .take(k)
             .map(|(id, score)| Hit {
                 score,
+                coverage: matched[&id] / total_idf,
                 chunk: &self.chunks[id as usize],
             })
             .collect()
@@ -296,6 +306,21 @@ mod tests {
             index.search("xilofone quântico", 3).is_empty(),
             "sem termo em comum, sem resultado"
         );
+    }
+
+    #[test]
+    fn coverage_is_the_share_of_question_words_found() {
+        let mut index = Index::new(200);
+        index.add(&doc(
+            "p",
+            "Porco-do-mar",
+            "Scotoplanes é o nome científico do porco-do-mar.",
+        ));
+        index.add(&doc("b", "Brasil", "O Brasil fica na América do Sul."));
+        let hit = &index.search("nome científico do porco-do-mar", 1)[0];
+        assert_eq!((hit.chunk.doc.as_str(), hit.coverage), ("p", 1.0));
+        let weak = &index.search("Quem descobriu o Brasil em 1500?", 1)[0];
+        assert!(weak.coverage < 0.5, "{}", weak.coverage);
     }
 
     #[test]
