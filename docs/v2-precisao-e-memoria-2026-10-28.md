@@ -110,3 +110,32 @@ maior consumo deixa de ser o grafo das camadas e passa a ser os logits (batch ×
 32.000 × 4 bytes: ~1 GB para 8 × 1.024, mais o gradiente) e a atenção sem fusão (matrizes
 T × T por cabeça). **Estimativa:** cabe com batch pequeno. Só uma medida na GPU confirma, e o
 `GpuTrainer` ainda não tem BF16, Adam 8 bits nem recomputação.
+
+## 3. Smoke test do 1B no Mac
+
+`sysctl hw.memsize` = 8.589.934.592 (8 GB). Antes do teste o swap já tinha 4,4 GB em uso, com
+o servidor Katsu (8792) e a API (8766) no ar. O 1B precisa de ~10,4 GB só de estado no melhor
+arranjo medido (seção 2): **não cabe neste Mac**, e tentar empurraria o sistema para o swap
+num disco do sistema quase cheio. O 1B não foi rodado.
+
+Rodou, no lugar, a **largura real do 1B** (d = 2048, 16 cabeças, vocabulário 32.000) com 1 e 2
+camadas, BF16 misto + Adam 8 bits + recomputação, contexto 128, batch 1, 6 passos, sempre o
+mesmo lote:
+
+`KATSU_OPTIM=adam8 KATSU_RECOMPUTE=1 v2_step bf16 2048 {1|2} 16 32000 128 1 6`
+
+| Camadas | Parâmetros | Pico do processo | s/passo (passos 2–6) | Perda: passo 1 → 6 |
+|---|---|---|---|---|
+| 1 | 181.688.320 | 1.871 MB | 0,66 | 10,746 → 0,0003 |
+| 2 | 232.038.400 | 2.391 MB | 0,99 | 10,716 → 0,0006 |
+
+A perda cai nos dois (o modelo decora um lote de 128 tokens; o teste confere que o treino
+funciona, não que o modelo aprende língua). Depois do segundo, o swap estava em 5,3 de 6 GB:
+parei aí de propósito, sem tentar 3 ou mais camadas.
+
+**Extrapolação para as 18 camadas do 1B (estimativa, não medida):** cada camada de largura 2048
+somou 50,35M parâmetros, **520 MB** de pico (10,3 bytes/parâmetro, o que a seção 2 prevê) e
+~0,33 s por passo no Mac. Para 18 camadas: ~1,87 + 17 × 0,52 ≈ **10,7 GB** de pico com
+contexto 128 e batch 1, e ~0,66 + 17 × 0,33 ≈ **6 s por passo de 128 tokens** (~20 tokens/s)
+na CPU do Mac. Treinar o 1B no Mac não é viável; o teste valida o caminho (BF16, Adam 8 bits,
+recomputação) na largura do 1B, não a velocidade na GPU.
