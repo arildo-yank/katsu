@@ -4,13 +4,19 @@
 //! `KatsuLmConfig` (sem grafo dinâmico), com as mesmas fórmulas do backend CPU; a paridade é
 //! conferida em `tests/gpu_train.rs`. O checkpoint continua no formato do host
 //! (`GpuLayout` faz a permutação de ida e volta).
+//!
+//! V2 (opções, todas desligadas por padrão): GEMM em BF16 nos Tensor Cores, Adam com momentos
+//! de 8 bits (o formato de `adam8.rs`, com blocos sobre a arena) e recomputação de ativações
+//! (guarda só a entrada de cada camada e refaz o forward dela no backward).
 use crate::{
+    adam8::State as Adam8State,
     gpu_layout::{GpuLayout, SftBatch},
-    Adam, KatsuLmConfig, Tensor, TensorError,
+    Adam, KatsuLmConfig, Tensor, TensorError, ADAM8_BLOCK,
 };
 use cudarc::{
     driver::{
-        CudaContext, CudaFunction, CudaSlice, CudaStream, DevicePtr, LaunchConfig, PushKernelArg,
+        CudaContext, CudaFunction, CudaModule, CudaSlice, CudaStream, DevicePtr, LaunchConfig,
+        PushKernelArg,
     },
     nvrtc::{compile_ptx_with_opts, CompileOptions},
 };
@@ -42,6 +48,10 @@ pub enum GemmKernel {
     /// Etapa 3b: Tensor Cores (WMMA) com entradas em TF32 e acumulação em FP32. Pesos,
     /// gradientes e Adam continuam em FP32; só os produtos perdem precisão (~1e-3 relativo).
     Tf32,
+    /// V2: Tensor Cores (WMMA) em BF16, acumulação em FP32, com a mistura do `Bf16Backend`:
+    /// ativações e gradientes de ativação voltam a BF16, gradientes de peso ficam FP32. Os
+    /// buffers continuam FP32 (a conversão é na carga): isto muda a conta, não a memória.
+    Bf16,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -50,6 +60,12 @@ pub struct GpuTrainOptions {
     /// Etapa 2: bias, GELU e resíduo no epílogo do GEMM, e gelu' no GEMM do backward, em vez
     /// de passadas separadas pela memória.
     pub fused: bool,
+    /// V2: momentos do Adam em 8 bits por blocos de `ADAM8_BLOCK` (~2,03 bytes/parâmetro em vez
+    /// de 8), a mesma conta do `Adam8bit` da CPU.
+    pub adam8: bool,
+    /// V2: ativações de uma camada só; o backward refaz o forward de cada camada (um forward
+    /// a mais por passo).
+    pub recompute: bool,
 }
 
 impl Default for GpuTrainOptions {
@@ -57,8 +73,25 @@ impl Default for GpuTrainOptions {
         Self {
             gemm: GemmKernel::Reference16,
             fused: true,
+            adam8: false,
+            recompute: false,
         }
     }
+}
+
+/// Estado do Adam na VRAM.
+enum Moments {
+    Fp32 {
+        m: CudaSlice<f32>,
+        v: CudaSlice<f32>,
+    },
+    /// Formato do `Adam8bit`: um byte por momento e uma escala FP32 por bloco.
+    Int8 {
+        m: CudaSlice<i8>,
+        v: CudaSlice<u8>,
+        m_scale: CudaSlice<f32>,
+        v_scale: CudaSlice<f32>,
+    },
 }
 
 /// O que o epílogo do GEMM faz além de escrever A·B (ver `epilogue` em train.cu).
@@ -116,8 +149,46 @@ const KERNELS: &[&str] = &[
     "prefix_fwd",
     "embed_bwd_prefix",
     "adam_masked",
+    "adam8",
 ];
 const SUMSQ_BLOCKS: usize = 1024;
+// o kernel adam8 usa um bloco de 256 threads por bloco de quantização
+const _: () = assert!(ADAM8_BLOCK == 256);
+
+/// Compila train.cu (e o GEMM de Tensor Cores pedido) para a GPU do contexto.
+fn build_module(ctx: &Arc<CudaContext>, gemm: GemmKernel) -> Result<Arc<CudaModule>> {
+    let (major, minor) = ctx.compute_capability().map_err(error)?;
+    // Os GEMMs de Tensor Cores precisam de mma.h (dos headers do CUDA) e só entram quando pedidos.
+    let tensor_cores = matches!(gemm, GemmKernel::Tf32 | GemmKernel::Bf16);
+    if tensor_cores && major < 8 {
+        return Err(TensorError::BackendUnavailable(
+            "TF32/BF16 Tensor Cores need sm_80 or newer",
+        ));
+    }
+    let mut source = include_str!("cuda/train.cu").to_owned();
+    match gemm {
+        GemmKernel::Tf32 => source.push_str(include_str!("cuda/train_tc.cu")),
+        GemmKernel::Bf16 => source.push_str(include_str!("cuda/train_bf16.cu")),
+        _ => {}
+    }
+    let cuda_home = std::env::var("CUDA_HOME").unwrap_or_else(|_| "/usr/local/cuda".into());
+    let ptx = compile_ptx_with_opts(
+        source,
+        CompileOptions {
+            options: vec![format!("--gpu-architecture=compute_{major}{minor}")],
+            prec_div: Some(true),
+            prec_sqrt: Some(true),
+            include_paths: if tensor_cores {
+                vec![format!("{cuda_home}/include")]
+            } else {
+                Vec::new()
+            },
+            ..Default::default()
+        },
+    )
+    .map_err(error)?;
+    ctx.load_module(ptx).map_err(error)
+}
 
 /// Começo de cada região de ativações; as por camada têm passo `*_stride`.
 #[derive(Debug, Clone, Copy, Default)]
@@ -154,6 +225,25 @@ struct Acts {
     sr: usize,
 }
 
+/// Endereços das ativações de uma camada (ver `GpuTrainer::layer_acts`).
+#[derive(Debug, Clone, Copy)]
+struct LayerActs {
+    x: u64,
+    ln1: u64,
+    mean1: u64,
+    rstd1: u64,
+    qkv: u64,
+    att: u64,
+    atty: u64,
+    xmid: u64,
+    ln2: u64,
+    mean2: u64,
+    rstd2: u64,
+    f1: u64,
+    gl: u64,
+    next: u64,
+}
+
 pub struct GpuTrainer {
     config: KatsuLmConfig,
     layout: GpuLayout,
@@ -165,8 +255,7 @@ pub struct GpuTrainer {
     kernels: HashMap<&'static str, CudaFunction>,
     weights: CudaSlice<f32>,
     grads: CudaSlice<f32>,
-    m: CudaSlice<f32>,
-    v: CudaSlice<f32>,
+    moments: Moments,
     _act: CudaSlice<f32>,
     tok: CudaSlice<i32>,
     tgt: CudaSlice<i32>,
@@ -176,8 +265,6 @@ pub struct GpuTrainer {
     nonfinite: CudaSlice<u32>,
     w: u64,
     g: u64,
-    pm: u64,
-    pv: u64,
     a: Acts,
     hyper: (f32, f32, f32, f32, i32),
     launches: u64,
@@ -228,9 +315,15 @@ impl GpuTrainer {
         })?
     }
 
-    /// Floats de ativação para o lote máximo (sem contar pesos, gradientes e Adam).
-    pub fn activation_floats(config: &KatsuLmConfig, max_batch: usize, max_t: usize) -> usize {
-        let (l, d, h, v) = (
+    /// Floats de ativação para o lote máximo (sem contar pesos, gradientes e Adam). Com
+    /// `recompute`, só a entrada de cada camada fica guardada; o resto existe para uma camada.
+    pub fn activation_floats(
+        config: &KatsuLmConfig,
+        max_batch: usize,
+        max_t: usize,
+        recompute: bool,
+    ) -> usize {
+        let (layers, d, h, v) = (
             config.layers,
             config.embed_dim,
             config.heads,
@@ -244,7 +337,8 @@ impl GpuTrainer {
             max_batch * h * max_t * max_t,
             rows,
         );
-        (l + 1) * sd                 // x
+        let l = if recompute { 1 } else { layers };
+        (layers + 1) * sd            // x
             + l * (sd * 4)           // xmid, ln1, ln2, atty
             + l * (sr * 4)           // médias e rstd
             + l * sq                 // qkv
@@ -277,47 +371,31 @@ impl GpuTrainer {
         // SAFETY: todo trabalho deste contexto vai para `stream`; nada é usado em outro stream.
         unsafe { ctx.disable_event_tracking() };
         let stream = ctx.default_stream();
-        let (major, minor) = ctx.compute_capability().map_err(error)?;
-        // O GEMM de Tensor Cores precisa de mma.h (dos headers do CUDA) e só entra quando pedido.
-        let tensor_cores = options.gemm == GemmKernel::Tf32;
-        let mut source = include_str!("cuda/train.cu").to_owned();
-        if tensor_cores {
-            if major < 8 {
-                return Err(TensorError::BackendUnavailable(
-                    "TF32 Tensor Cores need sm_80 or newer",
-                ));
-            }
-            source.push_str(include_str!("cuda/train_tc.cu"));
-        }
-        let cuda_home = std::env::var("CUDA_HOME").unwrap_or_else(|_| "/usr/local/cuda".into());
-        let ptx = compile_ptx_with_opts(
-            source,
-            CompileOptions {
-                options: vec![format!("--gpu-architecture=compute_{major}{minor}")],
-                prec_div: Some(true),
-                prec_sqrt: Some(true),
-                include_paths: if tensor_cores {
-                    vec![format!("{cuda_home}/include")]
-                } else {
-                    Vec::new()
-                },
-                ..Default::default()
-            },
-        )
-        .map_err(error)?;
-        let module = ctx.load_module(ptx).map_err(error)?;
+        let module = build_module(&ctx, options.gemm)?;
         let mut kernels = HashMap::new();
         for &name in KERNELS {
             kernels.insert(name, module.load_function(name).map_err(error)?);
         }
-        if tensor_cores {
-            kernels.insert("gemm_tc", module.load_function("gemm_tc").map_err(error)?);
+        let gemm = match options.gemm {
+            GemmKernel::Tf32 => Some("gemm_tc"),
+            GemmKernel::Bf16 => Some("gemm_bf16"),
+            _ => None,
+        };
+        if let Some(name) = gemm {
+            kernels.insert(name, module.load_function(name).map_err(error)?);
         }
 
         let total = layout.total;
-        let act_floats = Self::activation_floats(&config, max_batch, max_t);
+        let act_floats = Self::activation_floats(&config, max_batch, max_t, options.recompute);
         let rows = max_batch * max_t;
-        let need = 4 * (4 * total + act_floats + 2 * rows) + 8 * SUMSQ_BLOCKS;
+        let blocks = total.div_ceil(ADAM8_BLOCK);
+        // pesos e gradientes FP32, mais o Adam (8 bytes/parâmetro, ou 2 + 8 por bloco)
+        let adam_bytes = if options.adam8 {
+            2 * total + 8 * blocks
+        } else {
+            8 * total
+        };
+        let need = 4 * (2 * total + act_floats + 2 * rows) + adam_bytes + 8 * SUMSQ_BLOCKS;
         let (free, _) = ctx.mem_get_info().map_err(error)?;
         if need > free {
             return Err(TensorError::BackendFailure(format!(
@@ -331,8 +409,19 @@ impl GpuTrainer {
         let weights = stream.clone_htod(&arena).map_err(error)?;
         drop(arena);
         let grads = stream.alloc_zeros::<f32>(total).map_err(error)?;
-        let m = stream.alloc_zeros::<f32>(total).map_err(error)?;
-        let v = stream.alloc_zeros::<f32>(total).map_err(error)?;
+        let moments = if options.adam8 {
+            Moments::Int8 {
+                m: stream.alloc_zeros::<i8>(total).map_err(error)?,
+                v: stream.alloc_zeros::<u8>(total).map_err(error)?,
+                m_scale: stream.alloc_zeros::<f32>(blocks).map_err(error)?,
+                v_scale: stream.alloc_zeros::<f32>(blocks).map_err(error)?,
+            }
+        } else {
+            Moments::Fp32 {
+                m: stream.alloc_zeros::<f32>(total).map_err(error)?,
+                v: stream.alloc_zeros::<f32>(total).map_err(error)?,
+            }
+        };
         let act = stream.alloc_zeros::<f32>(act_floats).map_err(error)?;
         let tok = stream.alloc_zeros::<i32>(rows).map_err(error)?;
         let tgt = stream.alloc_zeros::<i32>(rows).map_err(error)?;
@@ -342,7 +431,7 @@ impl GpuTrainer {
         let nonfinite = stream.alloc_zeros::<u32>(1).map_err(error)?;
 
         let ptr = |s: &CudaSlice<f32>| s.device_ptr(&stream).0;
-        let (w, g, pm, pv, base) = (ptr(&weights), ptr(&grads), ptr(&m), ptr(&v), ptr(&act));
+        let (w, g, base) = (ptr(&weights), ptr(&grads), ptr(&act));
 
         let (l, d, h, vocab) = (
             config.layers,
@@ -357,6 +446,8 @@ impl GpuTrainer {
             max_batch * h * max_t * max_t,
             rows,
         );
+        // por camada, ou uma camada só com recomputação
+        let k = if options.recompute { 1 } else { l };
         let mut next = 0;
         let mut take = |n: usize| {
             let p = at(base, next);
@@ -365,18 +456,18 @@ impl GpuTrainer {
         };
         let a = Acts {
             x: take((l + 1) * sd),
-            xmid: take(l * sd),
-            ln1: take(l * sd),
-            ln2: take(l * sd),
-            atty: take(l * sd),
-            mean1: take(l * sr),
-            rstd1: take(l * sr),
-            mean2: take(l * sr),
-            rstd2: take(l * sr),
-            qkv: take(l * sq),
-            att: take(l * sa),
-            f1: take(l * sf),
-            gl: take(l * sf),
+            xmid: take(k * sd),
+            ln1: take(k * sd),
+            ln2: take(k * sd),
+            atty: take(k * sd),
+            mean1: take(k * sr),
+            rstd1: take(k * sr),
+            mean2: take(k * sr),
+            rstd2: take(k * sr),
+            qkv: take(k * sq),
+            att: take(k * sa),
+            f1: take(k * sf),
+            gl: take(k * sf),
             lnf: take(sd),
             meanf: take(sr),
             rstdf: take(sr),
@@ -406,8 +497,7 @@ impl GpuTrainer {
             kernels,
             weights,
             grads,
-            m,
-            v,
+            moments,
             _act: act,
             tok,
             tgt,
@@ -417,8 +507,6 @@ impl GpuTrainer {
             nonfinite,
             w,
             g,
-            pm,
-            pv,
             a,
             hyper: adam.hyperparameters(),
             launches: 0,
@@ -432,24 +520,52 @@ impl GpuTrainer {
 
     /// Troca o estado do Adam (hiperparâmetros, passo e momentos), ex.: ao passar da fase de
     /// adaptação ao corpus para o SFT, que começa com um Adam novo.
+    /// Com `adam8`, momentos FP32 são quantizados no host (escala no máximo de cada bloco).
     pub fn load_adam(&mut self, adam: &Adam) -> Result<()> {
         let moments = adam.moments();
-        if moments.is_empty() {
-            let (m, v) = (self.pm, self.pv);
-            let total = self.layout.total;
-            self.elementwise("fill0", total, &[P(m), L(long(total))])?;
-            self.elementwise("fill0", total, &[P(v), L(long(total))])?;
-        } else {
-            let ms: Vec<&[f32]> = moments.iter().map(|(m, _)| m.as_slice()).collect();
-            let vs: Vec<&[f32]> = moments.iter().map(|(_, v)| v.as_slice()).collect();
-            self.stream
-                .memcpy_htod(&self.layout.pack(&ms)?, &mut self.m)
-                .map_err(error)?;
-            self.stream
-                .memcpy_htod(&self.layout.pack(&vs)?, &mut self.v)
-                .map_err(error)?;
-        }
+        let stream = self.stream.clone();
         self.hyper = adam.hyperparameters();
+        if moments.is_empty() {
+            match &mut self.moments {
+                Moments::Fp32 { m, v } => {
+                    stream.memset_zeros(m).map_err(error)?;
+                    stream.memset_zeros(v).map_err(error)?;
+                }
+                Moments::Int8 {
+                    m,
+                    v,
+                    m_scale,
+                    v_scale,
+                } => {
+                    stream.memset_zeros(m).map_err(error)?;
+                    stream.memset_zeros(v).map_err(error)?;
+                    stream.memset_zeros(m_scale).map_err(error)?;
+                    stream.memset_zeros(v_scale).map_err(error)?;
+                }
+            }
+            return Ok(());
+        }
+        let ms: Vec<&[f32]> = moments.iter().map(|(m, _)| m.as_slice()).collect();
+        let vs: Vec<&[f32]> = moments.iter().map(|(_, v)| v.as_slice()).collect();
+        let (m, v) = (self.layout.pack(&ms)?, self.layout.pack(&vs)?);
+        match &mut self.moments {
+            Moments::Fp32 { m: dm, v: dv } => {
+                stream.memcpy_htod(&m, dm).map_err(error)?;
+                stream.memcpy_htod(&v, dv).map_err(error)?;
+            }
+            Moments::Int8 {
+                m: dm,
+                v: dv,
+                m_scale,
+                v_scale,
+            } => {
+                let q = Adam8State::quantize(&m, &v)?;
+                stream.memcpy_htod(&q.m, dm).map_err(error)?;
+                stream.memcpy_htod(&q.v, dv).map_err(error)?;
+                stream.memcpy_htod(&q.m_scale, m_scale).map_err(error)?;
+                stream.memcpy_htod(&q.v_scale, v_scale).map_err(error)?;
+            }
+        }
         Ok(())
     }
 
@@ -547,6 +663,7 @@ impl GpuTrainer {
             GemmKernel::Reference16 => self.run("gemm16", tiles(16), (16, 16, 1), 0, &args),
             GemmKernel::Tiled64 => self.run("gemm64", tiles(64), (256, 1, 1), 0, &args),
             GemmKernel::Tf32 => self.run("gemm_tc", tiles(64), (128, 1, 1), 0, &args),
+            GemmKernel::Bf16 => self.run("gemm_bf16", tiles(64), (128, 1, 1), 0, &args),
         }
     }
 
@@ -712,9 +829,7 @@ impl GpuTrainer {
 
     fn forward(&mut self, b: usize, t: usize, grad: bool) -> Result<f64> {
         let c = self.config;
-        let (d, h, vocab) = (c.embed_dim, c.heads, c.vocab_size);
-        let (dh, f, rows) = (d / h, 4 * d, b * t);
-        let scale = 1.0 / (dh as f32).sqrt();
+        let (d, vocab, rows) = (c.embed_dim, c.vocab_size, b * t);
         let a = self.a;
         let tok = self.tok.device_ptr(&self.stream).0;
         let (wte, wpe) = (at(self.w, self.layout.wte), at(self.w, self.layout.wpe));
@@ -748,126 +863,7 @@ impl GpuTrainer {
             )?;
         }
         for l in 0..c.layers {
-            let s = self.layout.layers[l];
-            let x = at(a.x, l * a.sd);
-            let (ln1, mean1, rstd1) = (
-                at(a.ln1, l * a.sd),
-                at(a.mean1, l * a.sr),
-                at(a.rstd1, l * a.sr),
-            );
-            let (qkv, att, atty) = (
-                at(a.qkv, l * a.sq),
-                at(a.att, l * a.sa),
-                at(a.atty, l * a.sd),
-            );
-            let xmid = at(a.xmid, l * a.sd);
-            let (ln2, mean2, rstd2) = (
-                at(a.ln2, l * a.sd),
-                at(a.mean2, l * a.sr),
-                at(a.rstd2, l * a.sr),
-            );
-            let (f1, gl) = (at(a.f1, l * a.sf), at(a.gl, l * a.sf));
-            let next = at(a.x, (l + 1) * a.sd);
-
-            self.layernorm(x, s.ln1_g, s.ln1_b, ln1, mean1, rstd1, rows)?;
-            self.gemm(
-                (ln1, false, d),
-                (at(self.w, s.wqkv), false, 3 * d),
-                (qkv, 3 * d),
-                (rows, 3 * d, d),
-                PLAIN,
-            )?;
-            self.run(
-                "attn_fwd",
-                (t as u32, h as u32, b as u32),
-                (128, 1, 1),
-                (32 + dh + t) * 4,
-                &[
-                    P(qkv),
-                    P(att),
-                    P(atty),
-                    I(int(t)?),
-                    I(int(h)?),
-                    I(int(dh)?),
-                    F(scale),
-                ],
-            )?;
-            let (wo, w1, b1, w2, b2) = (
-                at(self.w, s.wo),
-                at(self.w, s.w1),
-                at(self.w, s.b1),
-                at(self.w, s.w2),
-                at(self.w, s.b2),
-            );
-            if self.options.fused {
-                // xmid = x + atty·Wo; gl = gelu(ln2·W1 + b1), guardando f1; próximo = xmid + gl·W2 + b2
-                let residual = Epi { res: x, ..PLAIN };
-                self.gemm(
-                    (atty, false, d),
-                    (wo, false, d),
-                    (xmid, d),
-                    (rows, d, d),
-                    residual,
-                )?;
-                self.layernorm(xmid, s.ln2_g, s.ln2_b, ln2, mean2, rstd2, rows)?;
-                let fc1 = Epi {
-                    bias: b1,
-                    pre: f1,
-                    mode: 1,
-                    ..PLAIN
-                };
-                self.gemm((ln2, false, d), (w1, false, f), (gl, f), (rows, f, d), fc1)?;
-                let fc2 = Epi {
-                    bias: b2,
-                    res: xmid,
-                    ..PLAIN
-                };
-                self.gemm((gl, false, f), (w2, false, d), (next, d), (rows, d, f), fc2)?;
-                continue;
-            }
-            self.gemm(
-                (atty, false, d),
-                (wo, false, d),
-                (a.tmp, d),
-                (rows, d, d),
-                PLAIN,
-            )?;
-            self.elementwise(
-                "add2",
-                rows * d,
-                &[P(x), P(a.tmp), P(xmid), L(long(rows * d))],
-            )?;
-            self.layernorm(xmid, s.ln2_g, s.ln2_b, ln2, mean2, rstd2, rows)?;
-            self.gemm(
-                (ln2, false, d),
-                (w1, false, f),
-                (f1, f),
-                (rows, f, d),
-                PLAIN,
-            )?;
-            self.elementwise(
-                "bias_add",
-                rows * f,
-                &[P(f1), P(b1), L(long(rows)), I(int(f)?)],
-            )?;
-            self.elementwise("gelu_fwd", rows * f, &[P(f1), P(gl), L(long(rows * f))])?;
-            self.gemm(
-                (gl, false, f),
-                (w2, false, d),
-                (a.tmp, d),
-                (rows, d, f),
-                PLAIN,
-            )?;
-            self.elementwise(
-                "bias_add",
-                rows * d,
-                &[P(a.tmp), P(b2), L(long(rows)), I(int(d)?)],
-            )?;
-            self.elementwise(
-                "add2",
-                rows * d,
-                &[P(xmid), P(a.tmp), P(next), L(long(rows * d))],
-            )?;
+            self.layer_forward(l, b, t)?;
         }
         let last = at(a.x, c.layers * a.sd);
         self.layernorm(
@@ -914,9 +910,7 @@ impl GpuTrainer {
 
     fn backward(&mut self, b: usize, t: usize) -> Result<()> {
         let c = self.config;
-        let (d, h, vocab) = (c.embed_dim, c.heads, c.vocab_size);
-        let (dh, f, rows) = (d / h, 4 * d, b * t);
-        let scale = 1.0 / (dh as f32).sqrt();
+        let (d, vocab, rows) = (c.embed_dim, c.vocab_size, b * t);
         let a = self.a;
         let (w, g) = (self.w, self.g);
         let head = self.layout.head;
@@ -947,135 +941,10 @@ impl GpuTrainer {
             rows,
         )?;
         for l in (0..c.layers).rev() {
-            let s = self.layout.layers[l];
-            let x = at(a.x, l * a.sd);
-            let (ln1, mean1, rstd1) = (
-                at(a.ln1, l * a.sd),
-                at(a.mean1, l * a.sr),
-                at(a.rstd1, l * a.sr),
-            );
-            let (qkv, att, atty) = (
-                at(a.qkv, l * a.sq),
-                at(a.att, l * a.sa),
-                at(a.atty, l * a.sd),
-            );
-            let xmid = at(a.xmid, l * a.sd);
-            let (ln2, mean2, rstd2) = (
-                at(a.ln2, l * a.sd),
-                at(a.mean2, l * a.sr),
-                at(a.rstd2, l * a.sr),
-            );
-            let (f1, gl) = (at(a.f1, l * a.sf), at(a.gl, l * a.sf));
-
-            // MLP: dres é dL/dx da saída da camada. Fundido, dF1 = (dres·W2ᵀ)·gelu'(f1) sai
-            // direto do epílogo; sem fusão, o gelu' é uma passada a mais.
-            let dgelu = if self.options.fused {
-                Epi {
-                    pre: f1,
-                    mode: 2,
-                    ..PLAIN
-                }
-            } else {
-                PLAIN
-            };
-            self.gemm(
-                (a.dres, false, d),
-                (at(w, s.w2), true, d),
-                (a.dbig, f),
-                (rows, f, d),
-                dgelu,
-            )?;
-            self.gemm(
-                (gl, true, f),
-                (a.dres, false, d),
-                (at(g, s.w2), d),
-                (f, d, rows),
-                ACC,
-            )?;
-            self.colsum(a.dres, at(g, s.b2), rows, d)?;
-            if !self.options.fused {
-                self.elementwise("gelu_bwd", rows * f, &[P(a.dbig), P(f1), L(long(rows * f))])?;
+            if self.options.recompute {
+                self.layer_forward(l, b, t)?;
             }
-            self.gemm(
-                (ln2, true, d),
-                (a.dbig, false, f),
-                (at(g, s.w1), f),
-                (d, f, rows),
-                ACC,
-            )?;
-            self.colsum(a.dbig, at(g, s.b1), rows, f)?;
-            self.gemm(
-                (a.dbig, false, f),
-                (at(w, s.w1), true, f),
-                (a.dh, d),
-                (rows, d, f),
-                PLAIN,
-            )?;
-            self.layernorm_backward(a.dh, xmid, mean2, rstd2, s.ln2_g, s.ln2_b, rows)?;
-            // atenção: dres agora é dL/dxmid
-            self.gemm(
-                (atty, true, d),
-                (a.dres, false, d),
-                (at(g, s.wo), d),
-                (d, d, rows),
-                ACC,
-            )?;
-            self.gemm(
-                (a.dres, false, d),
-                (at(w, s.wo), true, d),
-                (a.datty, d),
-                (rows, d, d),
-                PLAIN,
-            )?;
-            self.run(
-                "attn_bwd_rows",
-                (t as u32, h as u32, b as u32),
-                (128, 1, 1),
-                (32 + dh + 2 * t) * 4,
-                &[
-                    P(qkv),
-                    P(att),
-                    P(a.datty),
-                    P(a.ds),
-                    P(a.dqkv),
-                    I(int(t)?),
-                    I(int(h)?),
-                    I(int(dh)?),
-                    F(scale),
-                ],
-            )?;
-            self.run(
-                "attn_bwd_cols",
-                (t as u32, h as u32, b as u32),
-                (64, 1, 1),
-                0,
-                &[
-                    P(qkv),
-                    P(att),
-                    P(a.ds),
-                    P(a.datty),
-                    P(a.dqkv),
-                    I(int(t)?),
-                    I(int(h)?),
-                    I(int(dh)?),
-                    F(scale),
-                ],
-            )?;
-            self.gemm(
-                (ln1, true, d),
-                (a.dqkv, false, 3 * d),
-                (at(g, s.wqkv), 3 * d),
-                (d, 3 * d, rows),
-                ACC,
-            )?;
-            self.gemm(
-                (a.dqkv, false, 3 * d),
-                (at(w, s.wqkv), true, 3 * d),
-                (a.dh, d),
-                (rows, d, 3 * d),
-                PLAIN,
-            )?;
-            self.layernorm_backward(a.dh, x, mean1, rstd1, s.ln1_g, s.ln1_b, rows)?;
+            self.layer_backward(l, b, t)?;
         }
         let tok = self.tok.device_ptr(&self.stream).0;
         let (dwte, dwpe) = (at(g, self.layout.wte), at(g, self.layout.wpe));
@@ -1110,6 +979,294 @@ impl GpuTrainer {
                 I(int(d)?),
             ],
         )
+    }
+
+    /// Ponteiros das ativações da camada `l`. Com recomputação só `x` e `next` são por camada;
+    /// o resto é o buffer da camada única, refeito antes do backward de cada camada.
+    fn layer_acts(&self, l: usize) -> LayerActs {
+        let a = self.a;
+        let k = if self.options.recompute { 0 } else { l };
+        LayerActs {
+            x: at(a.x, l * a.sd),
+            ln1: at(a.ln1, k * a.sd),
+            mean1: at(a.mean1, k * a.sr),
+            rstd1: at(a.rstd1, k * a.sr),
+            qkv: at(a.qkv, k * a.sq),
+            att: at(a.att, k * a.sa),
+            atty: at(a.atty, k * a.sd),
+            xmid: at(a.xmid, k * a.sd),
+            ln2: at(a.ln2, k * a.sd),
+            mean2: at(a.mean2, k * a.sr),
+            rstd2: at(a.rstd2, k * a.sr),
+            f1: at(a.f1, k * a.sf),
+            gl: at(a.gl, k * a.sf),
+            next: at(a.x, (l + 1) * a.sd),
+        }
+    }
+
+    /// Forward de uma camada: lê `x` da camada `l` e escreve o da `l + 1`.
+    fn layer_forward(&mut self, l: usize, b: usize, t: usize) -> Result<()> {
+        let c = self.config;
+        let (d, h) = (c.embed_dim, c.heads);
+        let (dh, f, rows) = (d / h, 4 * d, b * t);
+        let scale = 1.0 / (dh as f32).sqrt();
+        let s = self.layout.layers[l];
+        let LayerActs {
+            x,
+            ln1,
+            mean1,
+            rstd1,
+            qkv,
+            att,
+            atty,
+            xmid,
+            ln2,
+            mean2,
+            rstd2,
+            f1,
+            gl,
+            next,
+        } = self.layer_acts(l);
+        let a = self.a;
+
+        self.layernorm(x, s.ln1_g, s.ln1_b, ln1, mean1, rstd1, rows)?;
+        self.gemm(
+            (ln1, false, d),
+            (at(self.w, s.wqkv), false, 3 * d),
+            (qkv, 3 * d),
+            (rows, 3 * d, d),
+            PLAIN,
+        )?;
+        self.run(
+            "attn_fwd",
+            (t as u32, h as u32, b as u32),
+            (128, 1, 1),
+            (32 + dh + t) * 4,
+            &[
+                P(qkv),
+                P(att),
+                P(atty),
+                I(int(t)?),
+                I(int(h)?),
+                I(int(dh)?),
+                F(scale),
+            ],
+        )?;
+        let (wo, w1, b1, w2, b2) = (
+            at(self.w, s.wo),
+            at(self.w, s.w1),
+            at(self.w, s.b1),
+            at(self.w, s.w2),
+            at(self.w, s.b2),
+        );
+        if self.options.fused {
+            // xmid = x + atty·Wo; gl = gelu(ln2·W1 + b1), guardando f1; próximo = xmid + gl·W2 + b2
+            let residual = Epi { res: x, ..PLAIN };
+            self.gemm(
+                (atty, false, d),
+                (wo, false, d),
+                (xmid, d),
+                (rows, d, d),
+                residual,
+            )?;
+            self.layernorm(xmid, s.ln2_g, s.ln2_b, ln2, mean2, rstd2, rows)?;
+            let fc1 = Epi {
+                bias: b1,
+                pre: f1,
+                mode: 1,
+                ..PLAIN
+            };
+            self.gemm((ln2, false, d), (w1, false, f), (gl, f), (rows, f, d), fc1)?;
+            let fc2 = Epi {
+                bias: b2,
+                res: xmid,
+                ..PLAIN
+            };
+            self.gemm((gl, false, f), (w2, false, d), (next, d), (rows, d, f), fc2)?;
+            return Ok(());
+        }
+        self.gemm(
+            (atty, false, d),
+            (wo, false, d),
+            (a.tmp, d),
+            (rows, d, d),
+            PLAIN,
+        )?;
+        self.elementwise(
+            "add2",
+            rows * d,
+            &[P(x), P(a.tmp), P(xmid), L(long(rows * d))],
+        )?;
+        self.layernorm(xmid, s.ln2_g, s.ln2_b, ln2, mean2, rstd2, rows)?;
+        self.gemm(
+            (ln2, false, d),
+            (w1, false, f),
+            (f1, f),
+            (rows, f, d),
+            PLAIN,
+        )?;
+        self.elementwise(
+            "bias_add",
+            rows * f,
+            &[P(f1), P(b1), L(long(rows)), I(int(f)?)],
+        )?;
+        self.elementwise("gelu_fwd", rows * f, &[P(f1), P(gl), L(long(rows * f))])?;
+        self.gemm(
+            (gl, false, f),
+            (w2, false, d),
+            (a.tmp, d),
+            (rows, d, f),
+            PLAIN,
+        )?;
+        self.elementwise(
+            "bias_add",
+            rows * d,
+            &[P(a.tmp), P(b2), L(long(rows)), I(int(d)?)],
+        )?;
+        self.elementwise(
+            "add2",
+            rows * d,
+            &[P(xmid), P(a.tmp), P(next), L(long(rows * d))],
+        )?;
+        Ok(())
+    }
+
+    /// Backward de uma camada: `a.dres` entra como dL/d(saída) e sai como dL/d(entrada).
+    fn layer_backward(&mut self, l: usize, b: usize, t: usize) -> Result<()> {
+        let c = self.config;
+        let (d, h) = (c.embed_dim, c.heads);
+        let (dh, f, rows) = (d / h, 4 * d, b * t);
+        let scale = 1.0 / (dh as f32).sqrt();
+        let s = self.layout.layers[l];
+        let LayerActs {
+            x,
+            ln1,
+            mean1,
+            rstd1,
+            qkv,
+            att,
+            atty,
+            xmid,
+            ln2,
+            mean2,
+            rstd2,
+            f1,
+            gl,
+            next: _,
+        } = self.layer_acts(l);
+        let a = self.a;
+        let (w, g) = (self.w, self.g);
+
+        // MLP: dres é dL/dx da saída da camada. Fundido, dF1 = (dres·W2ᵀ)·gelu'(f1) sai
+        // direto do epílogo; sem fusão, o gelu' é uma passada a mais.
+        let dgelu = if self.options.fused {
+            Epi {
+                pre: f1,
+                mode: 2,
+                ..PLAIN
+            }
+        } else {
+            PLAIN
+        };
+        self.gemm(
+            (a.dres, false, d),
+            (at(w, s.w2), true, d),
+            (a.dbig, f),
+            (rows, f, d),
+            dgelu,
+        )?;
+        self.gemm(
+            (gl, true, f),
+            (a.dres, false, d),
+            (at(g, s.w2), d),
+            (f, d, rows),
+            ACC,
+        )?;
+        self.colsum(a.dres, at(g, s.b2), rows, d)?;
+        if !self.options.fused {
+            self.elementwise("gelu_bwd", rows * f, &[P(a.dbig), P(f1), L(long(rows * f))])?;
+        }
+        self.gemm(
+            (ln2, true, d),
+            (a.dbig, false, f),
+            (at(g, s.w1), f),
+            (d, f, rows),
+            ACC,
+        )?;
+        self.colsum(a.dbig, at(g, s.b1), rows, f)?;
+        self.gemm(
+            (a.dbig, false, f),
+            (at(w, s.w1), true, f),
+            (a.dh, d),
+            (rows, d, f),
+            PLAIN,
+        )?;
+        self.layernorm_backward(a.dh, xmid, mean2, rstd2, s.ln2_g, s.ln2_b, rows)?;
+        // atenção: dres agora é dL/dxmid
+        self.gemm(
+            (atty, true, d),
+            (a.dres, false, d),
+            (at(g, s.wo), d),
+            (d, d, rows),
+            ACC,
+        )?;
+        self.gemm(
+            (a.dres, false, d),
+            (at(w, s.wo), true, d),
+            (a.datty, d),
+            (rows, d, d),
+            PLAIN,
+        )?;
+        self.run(
+            "attn_bwd_rows",
+            (t as u32, h as u32, b as u32),
+            (128, 1, 1),
+            (32 + dh + 2 * t) * 4,
+            &[
+                P(qkv),
+                P(att),
+                P(a.datty),
+                P(a.ds),
+                P(a.dqkv),
+                I(int(t)?),
+                I(int(h)?),
+                I(int(dh)?),
+                F(scale),
+            ],
+        )?;
+        self.run(
+            "attn_bwd_cols",
+            (t as u32, h as u32, b as u32),
+            (64, 1, 1),
+            0,
+            &[
+                P(qkv),
+                P(att),
+                P(a.ds),
+                P(a.datty),
+                P(a.dqkv),
+                I(int(t)?),
+                I(int(h)?),
+                I(int(dh)?),
+                F(scale),
+            ],
+        )?;
+        self.gemm(
+            (ln1, true, d),
+            (a.dqkv, false, 3 * d),
+            (at(g, s.wqkv), 3 * d),
+            (d, 3 * d, rows),
+            ACC,
+        )?;
+        self.gemm(
+            (a.dqkv, false, 3 * d),
+            (at(w, s.wqkv), true, 3 * d),
+            (a.dh, d),
+            (rows, d, 3 * d),
+            PLAIN,
+        )?;
+        self.layernorm_backward(a.dh, x, mean1, rstd1, s.ln1_g, s.ln1_b, rows)?;
+        Ok(())
     }
 
     /// Norma L2 dos gradientes acumulados (em f64) e quantos não são finitos.
@@ -1150,38 +1307,12 @@ impl GpuTrainer {
         self.stream
             .memcpy_htod(&[0u32], &mut self.nonfinite)
             .map_err(error)?;
-        let nonfinite = self.nonfinite.device_ptr(&self.stream).0;
+        let stream = &self.stream;
+        let nonfinite = self.nonfinite.device_ptr(stream).0;
         let total = self.layout.total;
-        if let Some(mask) = &self.trainable {
-            let mask = mask.device_ptr(&self.stream).0;
-            let args = [
-                P(self.w),
-                P(self.g),
-                P(self.pm),
-                P(self.pv),
-                P(mask),
-                L(long(total)),
-                F(beta1),
-                F(beta2),
-                F(lr),
-                F(eps),
-                F(c1),
-                F(c2),
-                P(nonfinite),
-            ];
-            self.elementwise("adam_masked", total, &args)?;
-            let mut count = [0u32];
-            self.stream
-                .memcpy_dtoh(&self.nonfinite, &mut count)
-                .map_err(error)?;
-            return Ok(count[0] as usize);
-        }
-        let args = [
-            P(self.w),
-            P(self.g),
-            P(self.pm),
-            P(self.pv),
-            L(long(total)),
+        let mask = self.trainable.as_ref().map(|m| m.device_ptr(stream).0);
+        let (w, g) = (self.w, self.g);
+        let hyper = [
             F(beta1),
             F(beta2),
             F(lr),
@@ -1190,7 +1321,47 @@ impl GpuTrainer {
             F(c2),
             P(nonfinite),
         ];
-        self.elementwise("adam", total, &args)?;
+        match &self.moments {
+            Moments::Int8 {
+                m,
+                v,
+                m_scale,
+                v_scale,
+            } => {
+                let mut args = vec![
+                    P(w),
+                    P(g),
+                    P(m.device_ptr(stream).0),
+                    P(v.device_ptr(stream).0),
+                    P(m_scale.device_ptr(stream).0),
+                    P(v_scale.device_ptr(stream).0),
+                    P(mask.unwrap_or(0)),
+                    L(long(total)),
+                ];
+                args.extend(hyper);
+                let blocks = total.div_ceil(ADAM8_BLOCK) as u32;
+                self.run("adam8", (blocks, 1, 1), (256, 1, 1), 0, &args)?;
+            }
+            Moments::Fp32 { m, v } => {
+                let mut args = vec![
+                    P(w),
+                    P(g),
+                    P(m.device_ptr(stream).0),
+                    P(v.device_ptr(stream).0),
+                ];
+                if let Some(mask) = mask {
+                    args.push(P(mask));
+                }
+                args.push(L(long(total)));
+                args.extend(hyper);
+                let name = if mask.is_some() {
+                    "adam_masked"
+                } else {
+                    "adam"
+                };
+                self.elementwise(name, total, &args)?;
+            }
+        }
         let mut count = [0u32];
         self.stream
             .memcpy_dtoh(&self.nonfinite, &mut count)
@@ -1247,17 +1418,129 @@ impl GpuTrainer {
         self.layout.unpack(&arena)
     }
 
-    /// Estado do Adam no formato do host (para checkpoint).
+    /// Estado do Adam no formato do host (para checkpoint). Com `adam8`, os momentos saem
+    /// dequantizados para FP32.
     pub fn adam(&self) -> Result<Adam> {
         if self.hyper.4 == 0 {
             return Adam::from_state(self.hyper, Vec::new());
         }
-        let m = self
-            .layout
-            .unpack(&self.stream.clone_dtoh(&self.m).map_err(error)?)?;
-        let v = self
-            .layout
-            .unpack(&self.stream.clone_dtoh(&self.v).map_err(error)?)?;
+        let host = |x: &CudaSlice<f32>| self.stream.clone_dtoh(x).map_err(error);
+        let (m, v) = match &self.moments {
+            Moments::Fp32 { m, v } => (host(m)?, host(v)?),
+            Moments::Int8 {
+                m,
+                v,
+                m_scale,
+                v_scale,
+            } => Adam8State {
+                m: self.stream.clone_dtoh(m).map_err(error)?,
+                v: self.stream.clone_dtoh(v).map_err(error)?,
+                m_scale: host(m_scale)?,
+                v_scale: host(v_scale)?,
+            }
+            .dequantize(),
+        };
+        let (m, v) = (self.layout.unpack(&m)?, self.layout.unpack(&v)?);
         Adam::from_state(self.hyper, m.into_iter().zip(v).collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{adam8, AdamStep};
+
+    /// O kernel `adam8` sobre um vetor de 3 blocos e 1/3, 6 passos com gradientes variados,
+    /// contra `adam8::apply` da CPU: pesos, momentos e escalas iguais bit a bit.
+    #[test]
+    fn adam8_kernel_is_bit_identical_to_cpu() {
+        if !cfg!(target_os = "linux") {
+            return;
+        }
+        let ctx = match std::panic::catch_unwind(|| CudaContext::new(0)) {
+            Ok(Ok(ctx)) => ctx,
+            _ => {
+                eprintln!("sem GPU, teste pulado");
+                return;
+            }
+        };
+        let stream = ctx.default_stream();
+        let module = build_module(&ctx, GemmKernel::Reference16).unwrap();
+        let kernel = module.load_function("adam8").unwrap();
+        let n = 3 * ADAM8_BLOCK + 85;
+        let blocks = n.div_ceil(ADAM8_BLOCK);
+        let wave = |seed: usize, scale: f32| -> Vec<f32> {
+            (0..n)
+                .map(|i| ((i * 7919 + seed * 104_729) % 2001) as f32 / 1000.0 - 1.0)
+                .map(|x| x * scale)
+                .collect()
+        };
+        let mut w_cpu = wave(0, 0.1);
+        let mut state = adam8::State::zeros(n).unwrap();
+        let w = stream.clone_htod(&w_cpu).unwrap();
+        let mut g = stream.alloc_zeros::<f32>(n).unwrap();
+        let qm = stream.alloc_zeros::<i8>(n).unwrap();
+        let qv = stream.alloc_zeros::<u8>(n).unwrap();
+        let sm = stream.alloc_zeros::<f32>(blocks).unwrap();
+        let sv = stream.alloc_zeros::<f32>(blocks).unwrap();
+        let bad = stream.alloc_zeros::<u32>(1).unwrap();
+        let (lr, beta1, beta2, eps) = (1e-3f32, 0.9f32, 0.999f32, 1e-8f32);
+        for step in 1..=6 {
+            // um bloco com gradientes mil vezes menores que os outros
+            let mut grad = wave(step, 1e-2);
+            grad[ADAM8_BLOCK..2 * ADAM8_BLOCK]
+                .iter_mut()
+                .for_each(|x| *x *= 1e-3);
+            let (c1, c2) = (1.0 - beta1.powi(step as i32), 1.0 - beta2.powi(step as i32));
+            let c = AdamStep {
+                beta1,
+                beta2,
+                lr,
+                eps,
+                correction1: c1,
+                correction2: c2,
+            };
+            adam8::apply(c, &mut w_cpu, &grad, &mut state);
+            stream.memcpy_htod(&grad, &mut g).unwrap();
+            let (pw, pg) = (w.device_ptr(&stream).0, g.device_ptr(&stream).0);
+            let (pm, pv) = (qm.device_ptr(&stream).0, qv.device_ptr(&stream).0);
+            let (ps, pu) = (sm.device_ptr(&stream).0, sv.device_ptr(&stream).0);
+            let pbad = bad.device_ptr(&stream).0;
+            let (none, count) = (0u64, n as i64);
+            let mut launch = stream.launch_builder(&kernel);
+            launch
+                .arg(&pw)
+                .arg(&pg)
+                .arg(&pm)
+                .arg(&pv)
+                .arg(&ps)
+                .arg(&pu)
+                .arg(&none)
+                .arg(&count)
+                .arg(&beta1)
+                .arg(&beta2)
+                .arg(&lr)
+                .arg(&eps)
+                .arg(&c1)
+                .arg(&c2)
+                .arg(&pbad);
+            // SAFETY: argumentos na ordem e nos tipos de `adam8` em train.cu; buffers de n
+            // posições e `blocks` escalas.
+            unsafe {
+                launch.launch(LaunchConfig {
+                    grid_dim: (blocks as u32, 1, 1),
+                    block_dim: (256, 1, 1),
+                    shared_mem_bytes: 0,
+                })
+            }
+            .unwrap();
+        }
+        let bits = |x: &[f32]| x.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+        assert_eq!(bits(&stream.clone_dtoh(&w).unwrap()), bits(&w_cpu), "pesos");
+        assert_eq!(stream.clone_dtoh(&qm).unwrap(), state.m, "m quantizado");
+        assert_eq!(stream.clone_dtoh(&qv).unwrap(), state.v, "v quantizado");
+        assert_eq!(bits(&stream.clone_dtoh(&sm).unwrap()), bits(&state.m_scale));
+        assert_eq!(bits(&stream.clone_dtoh(&sv).unwrap()), bits(&state.v_scale));
+        assert!(stream.clone_dtoh(&g).unwrap().iter().all(|&x| x == 0.0));
     }
 }

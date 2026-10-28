@@ -2,8 +2,8 @@
 //! e pesos depois de um passo do Adam. Sem GPU (ou fora do Linux) os testes são pulados.
 #![cfg(feature = "cuda")]
 use katsu_core::{
-    step_partial, Adam, CpuBackend, GemmKernel, GpuTrainOptions, GpuTrainer, KatsuLmConfig,
-    Optimizer, SftBatch, Tensor, TensorError,
+    step_partial, Adam, Adam8bit, CpuBackend, GemmKernel, GpuTrainOptions, GpuTrainer,
+    KatsuLmConfig, Optimizer, SftBatch, Tensor, TensorError,
 };
 use std::sync::Arc;
 
@@ -106,13 +106,24 @@ const TF32: Tol = Tol {
     grad: 3e-2,
     flips: 5e-2,
 };
+/// BF16 (7 bits de mantissa, ~8× o erro do TF32) nos operandos e nas ativações dos GEMMs. O
+/// critério principal da V2 é a curva de perda (`v2_options_together_track_fp32_cpu_loss`).
+const BF16: Tol = Tol {
+    loss: 1e-2,
+    grad: 0.25,
+    flips: 0.2,
+};
+
+fn tolerance(options: GpuTrainOptions) -> Tol {
+    match options.gemm {
+        GemmKernel::Tf32 => TF32,
+        GemmKernel::Bf16 => BF16,
+        _ => STRICT,
+    }
+}
 
 fn check_parity(c: KatsuLmConfig, options: GpuTrainOptions) {
-    let tol = if options.gemm == GemmKernel::Tf32 {
-        TF32
-    } else {
-        STRICT
-    };
+    let tol = tolerance(options);
     let params = c.init(11).unwrap();
     let (a, b, d) = (
         tokens(1, 11, c.vocab_size),
@@ -221,6 +232,7 @@ fn reference_kernels_match_cpu_autograd() {
         GpuTrainOptions {
             gemm: GemmKernel::Reference16,
             fused: false,
+            ..Default::default()
         },
     );
 }
@@ -232,6 +244,7 @@ fn fused_epilogues_match_cpu_autograd() {
         GpuTrainOptions {
             gemm: GemmKernel::Reference16,
             fused: true,
+            ..Default::default()
         },
     );
 }
@@ -243,6 +256,7 @@ fn tiled64_matches_cpu_autograd() {
         GpuTrainOptions {
             gemm: GemmKernel::Tiled64,
             fused: true,
+            ..Default::default()
         },
     );
 }
@@ -261,6 +275,7 @@ fn odd_sizes_tiled64_match_cpu_autograd() {
         GpuTrainOptions {
             gemm: GemmKernel::Tiled64,
             fused: true,
+            ..Default::default()
         },
     );
 }
@@ -272,6 +287,7 @@ fn tf32_tensor_cores_match_cpu_autograd_within_tf32_precision() {
         GpuTrainOptions {
             gemm: GemmKernel::Tf32,
             fused: true,
+            ..Default::default()
         },
     );
 }
@@ -291,6 +307,7 @@ fn odd_sizes_match_cpu_autograd() {
         GpuTrainOptions {
             gemm: GemmKernel::Reference16,
             fused: false,
+            ..Default::default()
         },
     );
 }
@@ -309,11 +326,7 @@ fn prefix_data(rows: usize, d: usize, seed: u64) -> Vec<f32> {
 /// da CPU. Com `perturb`, um vetor do lote da GPU muda 10% e a comparação do gradiente do
 /// prefixo tem de falhar (controle negativo).
 fn check_prefix_parity(c: KatsuLmConfig, options: GpuTrainOptions, perturb: bool) {
-    let tol = if options.gemm == GemmKernel::Tf32 {
-        TF32
-    } else {
-        STRICT
-    };
+    let tol = tolerance(options);
     let params = c.init(13).unwrap();
     let (a, b, e) = (
         tokens(4, 9, c.vocab_size),
@@ -388,6 +401,7 @@ fn prefix_input_matches_cpu_autograd() {
         GpuTrainOptions {
             gemm: GemmKernel::Tiled64,
             fused: true,
+            ..Default::default()
         },
         false,
     );
@@ -400,6 +414,7 @@ fn prefix_input_matches_cpu_autograd_within_tf32_precision() {
         GpuTrainOptions {
             gemm: GemmKernel::Tf32,
             fused: true,
+            ..Default::default()
         },
         false,
     );
@@ -412,6 +427,7 @@ fn prefix_parity_detects_a_wrong_vector() {
         GpuTrainOptions {
             gemm: GemmKernel::Tiled64,
             fused: true,
+            ..Default::default()
         },
         true,
     );
@@ -427,6 +443,7 @@ fn frozen_tensors_stay_bit_identical_on_gpu() {
     let options = GpuTrainOptions {
         gemm: GemmKernel::Tiled64,
         fused: true,
+        ..Default::default()
     };
     let Some(mut gpu) = trainer(c, &params, &Adam::new(lr).unwrap(), 4, options) else {
         return;
@@ -467,4 +484,232 @@ fn frozen_tensors_stay_bit_identical_on_gpu() {
         gpu.prefix_grad().is_err(),
         "o último lote não tinha prefixo"
     );
+}
+
+// ---------------------------------------------------------------------------------------
+// V2: BF16 nos Tensor Cores, Adam de 8 bits e recomputação de ativações, contra a CPU.
+
+#[test]
+fn bf16_tensor_cores_match_cpu_autograd_within_bf16_precision() {
+    check_parity(
+        tiny(),
+        GpuTrainOptions {
+            gemm: GemmKernel::Bf16,
+            ..Default::default()
+        },
+    );
+}
+
+#[test]
+fn recompute_matches_cpu_autograd() {
+    for gemm in [GemmKernel::Tiled64, GemmKernel::Bf16] {
+        check_parity(
+            tiny(),
+            GpuTrainOptions {
+                gemm,
+                recompute: true,
+                ..Default::default()
+            },
+        );
+    }
+}
+
+/// Com e sem recomputação, na mesma GPU: a mesma perda e os mesmos gradientes (só a ordem dos
+/// atomicAdd do backward muda).
+#[test]
+fn recompute_gives_the_same_gradients_as_stored_activations() {
+    let c = KatsuLmConfig {
+        layers: 3,
+        ..tiny()
+    };
+    let params = c.init(19).unwrap();
+    let (a, b) = (tokens(10, 14, c.vocab_size), tokens(11, 9, c.vocab_size));
+    let examples: Vec<Example> = vec![(&a, 5), (&b, 3)];
+    let batch = SftBatch::new(&examples).unwrap();
+    let mut results = Vec::new();
+    for recompute in [false, true] {
+        let options = GpuTrainOptions {
+            gemm: GemmKernel::Tiled64,
+            recompute,
+            ..Default::default()
+        };
+        let Some(mut gpu) = trainer(c, &params, &Adam::new(1e-3).unwrap(), 2, options) else {
+            return;
+        };
+        let loss = gpu.loss_and_grad(&batch).unwrap();
+        results.push((loss, gpu.grads().unwrap()));
+    }
+    let ((plain_loss, plain), (loss, grads)) = (&results[0], &results[1]);
+    assert_eq!(
+        plain_loss, loss,
+        "a perda do forward não depende da recomputação"
+    );
+    for (i, (x, y)) in grads.iter().zip(plain).enumerate() {
+        assert_close(&format!("grad[{i}]"), x, y, 1e-6, 1e-12);
+    }
+}
+
+/// Perdas da GPU e da CPU, pesos finais da GPU e da CPU.
+type Trained = (Vec<f64>, Vec<f64>, Vec<Tensor>, Vec<Tensor>);
+
+/// `steps` passos no mesmo lote, na GPU e na CPU, a partir dos mesmos pesos; devolve as perdas
+/// e os pesos finais dos dois lados.
+fn train_both(
+    c: KatsuLmConfig,
+    options: GpuTrainOptions,
+    cpu_optimizer: &mut dyn Optimizer,
+    lr: f32,
+    steps: usize,
+) -> Option<Trained> {
+    let params = c.init(23).unwrap();
+    let (a, b, d) = (
+        tokens(12, 15, c.vocab_size),
+        tokens(13, 10, c.vocab_size),
+        tokens(14, 16, c.vocab_size),
+    );
+    let examples: Vec<Example> = vec![(&a, 3), (&b, 2), (&d, 6)];
+    let batch = SftBatch::new(&examples).unwrap();
+    let mut gpu = trainer(c, &params, &Adam::new(lr).unwrap(), 4, options)?;
+    let mut gpu_losses = Vec::new();
+    for _ in 0..steps {
+        gpu_losses.push(gpu.loss_and_grad(&batch).unwrap());
+        assert_eq!(gpu.adam_step().unwrap(), 0);
+    }
+    let mut host = params;
+    let mut cpu_losses = Vec::new();
+    for _ in 0..steps {
+        let loss = cpu_loss(&c, &host, &examples);
+        cpu_losses.push(f64::from(loss.data()[0]));
+        loss.backward_release().unwrap();
+        host = cpu_optimizer.step_owned(host).unwrap();
+    }
+    Some((gpu_losses, cpu_losses, gpu.params().unwrap(), host))
+}
+
+/// Adam de 8 bits na GPU contra o `Adam8bit` da CPU, 8 passos. Os blocos de quantização não
+/// coincidem (na GPU cobrem a arena, na CPU cada tensor), então não é bit a bit (isso é
+/// conferido no teste do kernel, em gpu_train.rs): perda a 0,5% e pesos a menos de meio passo
+/// máximo do Adam por passo.
+#[test]
+fn adam8_on_gpu_tracks_cpu_adam8bit() {
+    let (lr, steps) = (3e-3, 8);
+    let options = GpuTrainOptions {
+        gemm: GemmKernel::Tiled64,
+        adam8: true,
+        ..Default::default()
+    };
+    let mut cpu = Adam8bit::new(lr).unwrap();
+    let Some((gpu, host, after, expected)) = train_both(tiny(), options, &mut cpu, lr, steps)
+    else {
+        return;
+    };
+    for (s, (x, y)) in gpu.iter().zip(&host).enumerate() {
+        assert!(
+            (x - y).abs() <= 5e-3 * y.abs(),
+            "passo {s}: GPU {x}, CPU {y}"
+        );
+    }
+    assert!(gpu[steps - 1] < gpu[0], "a perda não caiu: {gpu:?}");
+    for (i, (x, y)) in after.iter().zip(&expected).enumerate() {
+        assert_close(
+            &format!("param[{i}]"),
+            x.data(),
+            y.data(),
+            0.0,
+            0.5 * lr * steps as f32,
+        );
+    }
+}
+
+/// Exportar o estado de 8 bits (dequantizado) e carregá-lo de volta continua o treino.
+#[test]
+fn adam8_state_survives_export_and_reload() {
+    let c = tiny();
+    let params = c.init(29).unwrap();
+    let a = tokens(15, 12, c.vocab_size);
+    let batch = SftBatch::new(&[(&a, 4)]).unwrap();
+    let options = GpuTrainOptions {
+        gemm: GemmKernel::Tiled64,
+        adam8: true,
+        ..Default::default()
+    };
+    let Some(mut gpu) = trainer(c, &params, &Adam::new(1e-3).unwrap(), 1, options) else {
+        return;
+    };
+    for _ in 0..3 {
+        gpu.loss_and_grad(&batch).unwrap();
+        gpu.adam_step().unwrap();
+    }
+    let exported = gpu.adam().unwrap();
+    assert_eq!(exported.hyperparameters().4, 3);
+    assert_eq!(exported.moments().len(), params.len());
+    assert!(exported
+        .moments()
+        .iter()
+        .any(|(m, _)| m.iter().any(|&x| x != 0.0)));
+    let weights = gpu.params().unwrap();
+    let mut resumed = trainer(c, &weights, &exported, 1, options).unwrap();
+    // requantizar o estado exportado devolve os mesmos momentos, a menos de um degrau
+    let reloaded = resumed.adam().unwrap();
+    assert_eq!(reloaded.hyperparameters().4, 3);
+    for (i, ((m, v), (m2, v2))) in exported
+        .moments()
+        .iter()
+        .zip(reloaded.moments())
+        .enumerate()
+    {
+        assert_close(&format!("m[{i}]"), m2, m, 2.0 / 127.0, 1e-20);
+        assert_close(&format!("v[{i}]"), v2, v, 4.0 / 255.0, 1e-20);
+    }
+    let (x, y) = (
+        gpu.loss_and_grad(&batch).unwrap(),
+        resumed.loss_and_grad(&batch).unwrap(),
+    );
+    assert_eq!(x, y, "mesmos pesos, mesma perda");
+    gpu.adam_step().unwrap();
+    resumed.adam_step().unwrap();
+    for (i, (p, q)) in gpu
+        .params()
+        .unwrap()
+        .iter()
+        .zip(resumed.params().unwrap())
+        .enumerate()
+    {
+        assert_close(&format!("param[{i}]"), p.data(), q.data(), 0.0, 0.5e-3);
+    }
+}
+
+/// As três opções da V2 juntas (BF16, Adam de 8 bits, recomputação) contra o treino FP32 da
+/// CPU com Adam FP32, como o teste de paridade do 134M no Mac: 8 passos, perda a 1% em cada.
+#[test]
+fn v2_options_together_track_fp32_cpu_loss() {
+    let (lr, steps) = (1e-3, 8);
+    let options = GpuTrainOptions {
+        gemm: GemmKernel::Bf16,
+        adam8: true,
+        recompute: true,
+        ..Default::default()
+    };
+    let c = KatsuLmConfig {
+        embed_dim: 64,
+        layers: 3,
+        ..tiny()
+    };
+    let mut cpu = Adam::new(lr).unwrap();
+    let Some((gpu, host, _, _)) = train_both(c, options, &mut cpu, lr, steps) else {
+        return;
+    };
+    for (s, (x, y)) in gpu.iter().zip(&host).enumerate() {
+        if std::env::var_os("KATSU_PARITY_VERBOSE").is_some() {
+            eprintln!(
+                "passo {s}: GPU {x:.6}, CPU {y:.6}, {:.3}%",
+                100.0 * (x - y).abs() / y
+            );
+        }
+        assert!(
+            (x - y).abs() <= 1e-2 * y.abs(),
+            "passo {s}: GPU {x}, CPU {y}"
+        );
+    }
+    assert!(gpu[steps - 1] < gpu[0], "a perda não caiu: {gpu:?}");
 }

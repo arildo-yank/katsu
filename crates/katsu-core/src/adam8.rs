@@ -18,16 +18,18 @@ type Result<T> = std::result::Result<T, TensorError>;
 
 pub const ADAM8_BLOCK: usize = 256;
 
+/// Momentos quantizados de um vetor contínuo, em blocos de `ADAM8_BLOCK`. É também o formato
+/// do Adam de 8 bits na GPU (`GpuTrainer`), com blocos sobre a arena inteira.
 #[derive(Debug, Clone, Default)]
-struct State {
-    m: Vec<i8>,
-    v: Vec<u8>,
-    m_scale: Vec<f32>,
-    v_scale: Vec<f32>,
+pub(crate) struct State {
+    pub(crate) m: Vec<i8>,
+    pub(crate) v: Vec<u8>,
+    pub(crate) m_scale: Vec<f32>,
+    pub(crate) v_scale: Vec<f32>,
 }
 
 impl State {
-    fn zeros(len: usize) -> Result<Self> {
+    pub(crate) fn zeros(len: usize) -> Result<Self> {
         let blocks = len.div_ceil(ADAM8_BLOCK);
         let mut state = Self::default();
         state.m.try_reserve_exact(len)?;
@@ -43,6 +45,40 @@ impl State {
 
     fn bytes(&self) -> usize {
         self.m.len() + self.v.len() + 4 * (self.m_scale.len() + self.v_scale.len())
+    }
+
+    /// Quantiza momentos FP32 (`m`, `v`), com a escala de cada bloco no máximo dele, como o
+    /// fim de um passo. Serve para retomar um checkpoint do Adam FP32 no Adam de 8 bits.
+    #[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+    pub(crate) fn quantize(m: &[f32], v: &[f32]) -> Result<Self> {
+        if m.len() != v.len() {
+            return Err(TensorError::OptimizerState);
+        }
+        let mut state = Self::zeros(m.len())?;
+        for (b, (mb, vb)) in m.chunks(ADAM8_BLOCK).zip(v.chunks(ADAM8_BLOCK)).enumerate() {
+            let max_m = mb.iter().fold(0.0f32, |a, x| a.max(x.abs()));
+            let max_u = vb.iter().fold(0.0f32, |a, x| a.max(x.sqrt()));
+            state.m_scale[b] = max_m;
+            state.v_scale[b] = max_u;
+            for (i, (&x, &y)) in mb.iter().zip(vb).enumerate() {
+                state.m[b * ADAM8_BLOCK + i] = encode_m(x, max_m);
+                state.v[b * ADAM8_BLOCK + i] = encode_v(y.sqrt(), max_u);
+            }
+        }
+        Ok(state)
+    }
+
+    /// Momentos em FP32 (`m`, `v`), para o checkpoint no formato do `Adam`.
+    #[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+    pub(crate) fn dequantize(&self) -> (Vec<f32>, Vec<f32>) {
+        let block = |i: usize| i / ADAM8_BLOCK;
+        let m = (self.m.iter().enumerate())
+            .map(|(i, &q)| decode_m(q, self.m_scale[block(i)]))
+            .collect();
+        let v = (self.v.iter().enumerate())
+            .map(|(i, &q)| decode_v(q, self.v_scale[block(i)]))
+            .collect();
+        (m, v)
     }
 }
 
@@ -181,7 +217,7 @@ impl Adam8bit {
     }
 }
 
-fn apply(c: AdamStep, weights: &mut [f32], grad: &[f32], state: &mut State) {
+pub(crate) fn apply(c: AdamStep, weights: &mut [f32], grad: &[f32], state: &mut State) {
     weights
         .par_chunks_mut(ADAM8_BLOCK)
         .zip(grad.par_chunks(ADAM8_BLOCK))
@@ -250,5 +286,44 @@ impl Optimizer for Adam8bit {
 
     fn learning_rate(&self) -> f32 {
         self.learning_rate
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quantize_round_trip_keeps_each_block_within_its_resolution() {
+        let n = 3 * ADAM8_BLOCK + 17;
+        let m: Vec<f32> = (0..n)
+            .map(|i| ((i * 37 % 101) as f32 - 50.0) * 1e-4)
+            .collect();
+        let v: Vec<f32> = (0..n).map(|i| ((i * 13 % 89) as f32) * 1e-8).collect();
+        let state = State::quantize(&m, &v).unwrap();
+        assert_eq!(state.m_scale.len(), 4);
+        let (m2, v2) = state.dequantize();
+        for (b, ((x, y), (p, q))) in m
+            .chunks(ADAM8_BLOCK)
+            .zip(v.chunks(ADAM8_BLOCK))
+            .zip(m2.chunks(ADAM8_BLOCK).zip(v2.chunks(ADAM8_BLOCK)))
+            .enumerate()
+        {
+            // passo da raiz quantizada: no pior caso 2/127 da escala (perto do máximo)
+            let (sm, su) = (state.m_scale[b], state.v_scale[b]);
+            for (a, c) in x.iter().zip(p) {
+                assert!((a - c).abs() <= 2.0 * sm / 127.0 + 1e-12, "m {a} vs {c}");
+            }
+            for (a, c) in y.iter().zip(q) {
+                assert!(
+                    (a.sqrt() - c.sqrt()).abs() <= 2.0 * su / 255.0 + 1e-12,
+                    "v {a} vs {c}"
+                );
+            }
+        }
+        assert!(matches!(
+            State::quantize(&m, &v[1..]),
+            Err(TensorError::OptimizerState)
+        ));
     }
 }

@@ -817,11 +817,24 @@ mod gpu {
             Ok("reference16") => GemmKernel::Reference16,
             Err(_) | Ok("tiled64") => GemmKernel::Tiled64,
             Ok("tf32") => GemmKernel::Tf32,
-            _ => return Err("KATSU_GEMM must be reference16, tiled64 or tf32".into()),
+            Ok("bf16") => GemmKernel::Bf16,
+            _ => return Err("KATSU_GEMM must be reference16, tiled64, tf32 or bf16".into()),
         };
         // KATSU_FUSED=0 desliga as fusões da Etapa 2 (para medir o ganho delas)
         let fused = std::env::var("KATSU_FUSED").as_deref() != Ok("0");
-        let options = GpuTrainOptions { gemm, fused };
+        // V2: KATSU_OPTIM=adam8 (momentos de 8 bits), KATSU_RECOMPUTE=1 (recomputação)
+        let adam8 = match std::env::var("KATSU_OPTIM").as_deref() {
+            Err(_) | Ok("adam") => false,
+            Ok("adam8") => true,
+            _ => return Err("KATSU_OPTIM must be adam or adam8".into()),
+        };
+        let recompute = std::env::var("KATSU_RECOMPUTE").as_deref() == Ok("1");
+        let options = GpuTrainOptions {
+            gemm,
+            fused,
+            adam8,
+            recompute,
+        };
         let pretrain_adam = if r.resume_phase == "pretrain" {
             r.resume_adam.take().ok_or("resume Adam")?
         } else {

@@ -139,3 +139,48 @@ somou 50,35M parâmetros, **520 MB** de pico (10,3 bytes/parâmetro, o que a se�
 contexto 128 e batch 1, e ~0,66 + 17 × 0,33 ≈ **6 s por passo de 128 tokens** (~20 tokens/s)
 na CPU do Mac. Treinar o 1B no Mac não é viável; o teste valida o caminho (BF16, Adam 8 bits,
 recomputação) na largura do 1B, não a velocidade na GPU.
+
+## 4. As três peças no `GpuTrainer` (CUDA), 28/10/2026
+
+Código pronto e compilado no Mac (`cargo clippy --features cuda`), **sem execução em GPU**: este
+Mac não tem NVIDIA nem nvcc, e os kernels são compilados em tempo de execução pelo NVRTC. Os
+testes da GPU são pulados aqui. **A correção só fica provada depois da rodada no pod**
+(`deploy/cuda/runpod_v2_probe.sh`), que roda a paridade antes de medir qualquer coisa.
+
+As opções ficam em `GpuTrainOptions`, todas desligadas por padrão (o treino atual não muda), e no
+`train_sft` por variável de ambiente:
+
+| Peça | Opção / variável | O que faz na GPU |
+|---|---|---|
+| BF16 | `GemmKernel::Bf16` / `KATSU_GEMM=bf16` | GEMM em Tensor Cores (WMMA m16n16k16, `cuda/train_bf16.cu`), entradas FP32 convertidas para BF16 na carga, acumulação FP32. A mistura é a do `Bf16Backend` da CPU: o produto de ativação e de gradiente de ativação volta a BF16, o gradiente de peso fica FP32. Precisa de sm_80+. |
+| Adam de 8 bits | `adam8: true` / `KATSU_OPTIM=adam8` | Kernel `adam8` em `cuda/train.cu`: um bloco de 256 threads por bloco de quantização, a mesma conta e o mesmo formato do `Adam8bit` (`adam8.rs`), com os blocos sobre a arena da GPU. Estado 2 bytes + 8 bytes por bloco de 256. O checkpoint sai dequantizado em FP32 (formato do `Adam`) e volta quantizado. |
+| Recomputação | `recompute: true` / `KATSU_RECOMPUTE=1` | Guarda só a entrada de cada camada; as demais ativações (QKV, atenção T×T, MLP, LayerNorms) existem para uma camada só. O backward refaz o forward de cada camada antes do backward dela. |
+
+O que **não** mudou: os buffers continuam FP32. O BF16 aqui muda a conta (e talvez a velocidade
+nos Tensor Cores), **não a memória**; a economia de memória vem do Adam de 8 bits e da
+recomputação. Atenção, LayerNorm, GELU e entropia cruzada continuam em FP32 (na CPU, as matmuls
+da atenção também passam por BF16: os dois lados não são idênticos). Contexto 1.024 com atenção
+fundida e leitura de vários shards continuam pendentes.
+
+### Testes de paridade (rodam no pod; pulados sem GPU)
+
+| Teste | Contra | Critério |
+|---|---|---|
+| `gpu_train::tests::adam8_kernel_is_bit_identical_to_cpu` | `adam8::apply` da CPU, 6 passos, 3⅓ blocos (um com gradientes 1.000× menores) | pesos, momentos e escalas **iguais bit a bit** (operações `_rn` sem FMA) |
+| `adam8_on_gpu_tracks_cpu_adam8bit` | `Adam8bit` da CPU, 8 passos | perda a 0,5%; pesos a ≤ meio passo máximo do Adam por passo |
+| `adam8_state_survives_export_and_reload` | o próprio estado exportado | momentos a um degrau de quantização; mesma perda depois de recarregar |
+| `bf16_tensor_cores_match_cpu_autograd_within_bf16_precision` | autograd FP32 da CPU | perda a 1%, gradientes a 25% do máximo de cada tensor |
+| `recompute_matches_cpu_autograd` | autograd FP32 da CPU (Tiled64 estrito e BF16) | as tolerâncias de cada GEMM |
+| `recompute_gives_the_same_gradients_as_stored_activations` | o `GpuTrainer` sem recomputação | perda igual; gradientes a 1e-6 |
+| `v2_options_together_track_fp32_cpu_loss` | treino FP32 da CPU com Adam FP32, 8 passos | perda a **1% em cada passo** (o critério do 134M no Mac) |
+
+As tolerâncias do BF16 são palpites a confirmar no pod; se um teste falhar, o número que sai em
+`parity.txt` (com `KATSU_PARITY_VERBOSE`) diz se é tolerância apertada ou kernel errado.
+
+### Estimativa de memória do 1B no pod (não medida)
+
+Contexto 256, batch 8, as três peças: estado de 10,03 bytes/parâmetro × 1,04B ≈ **9,7 GiB**, mais
+~1 GiB de ativações (entradas das 18 camadas, uma camada inteira, logits de 8 × 256 × 32.000) e o
+contexto CUDA. Total esperado ~11–12 GiB, contra 21,4 GiB medidos em FP32 no mesmo batch.
+**Velocidade: só a medida diz.** A recomputação custa um forward a mais por passo; os Tensor Cores
+em BF16 podem compensar ou não.

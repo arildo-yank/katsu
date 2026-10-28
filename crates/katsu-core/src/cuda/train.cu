@@ -443,6 +443,61 @@ extern "C" __global__ void adam_masked(float* w, float* g, float* m, float* v,
     g[i] = 0.0f;
     if (!isfinite(wi)) atomicAdd(nonfinite, 1u);
 }
+// V2: Adam de 8 bits (adam8.rs), um bloco de 256 threads por bloco de quantização da arena.
+// Dequantiza com a escala antiga, faz a conta em FP32 e requantiza com o máximo novo do bloco.
+// As operações vão com _rn explícito para o compilador não fundir em FMA: com o mesmo bloco,
+// o resultado é igual bit a bit ao do Adam8bit da CPU (conferido em gpu_train.rs).
+// Com máscara, o peso congelado não muda e o momento dele só é requantizado.
+__device__ __forceinline__ float dec_m(signed char q, float s) {
+    float r = __fdiv_rn((float)q, 127.0f);
+    return __fmul_rn(__fmul_rn(r, fabsf(r)), s);
+}
+// √v quantizado: u = r²·escala, v = u².
+__device__ __forceinline__ float dec_u(unsigned char q, float s) {
+    float r = __fdiv_rn((float)q, 255.0f);
+    return __fmul_rn(__fmul_rn(r, r), s);
+}
+__device__ __forceinline__ signed char enc_m(float x, float s) {
+    if (s == 0.0f) return 0;
+    float q = roundf(__fmul_rn(__fmul_rn(127.0f, copysignf(1.0f, x)), __fsqrt_rn(__fdiv_rn(fabsf(x), s))));
+    return (signed char)fminf(fmaxf(q, -127.0f), 127.0f);
+}
+__device__ __forceinline__ unsigned char enc_u(float u, float s) {
+    if (s == 0.0f) return 0;
+    float q = roundf(__fmul_rn(255.0f, __fsqrt_rn(__fdiv_rn(u, s))));
+    return (unsigned char)fminf(fmaxf(q, 0.0f), 255.0f);
+}
+extern "C" __global__ void __launch_bounds__(256)
+adam8(float* w, float* g, signed char* qm, unsigned char* qv, float* sm, float* su,
+      const unsigned char* mask, long long count, float beta1, float beta2, float lr, float eps,
+      float c1, float c2, unsigned int* nonfinite) {
+    __shared__ float red[32];
+    long long i = blockIdx.x * 256LL + threadIdx.x;
+    int live = i < count;
+    float om = sm[blockIdx.x], ou = su[blockIdx.x];
+    float mi = 0.0f, ui = 0.0f;
+    if (live) {
+        float m0 = dec_m(qm[i], om), u0 = dec_u(qv[i], ou);
+        float gi = g[i];
+        g[i] = 0.0f;
+        if (mask && !mask[i]) {
+            mi = m0;
+            ui = u0;
+        } else {
+            mi = __fadd_rn(__fmul_rn(beta1, m0), __fmul_rn(1.0f - beta1, gi));
+            float vi = __fadd_rn(__fmul_rn(beta2, __fmul_rn(u0, u0)), __fmul_rn(__fmul_rn(1.0f - beta2, gi), gi));
+            float step = __fdiv_rn(__fmul_rn(lr, __fdiv_rn(mi, c1)), __fadd_rn(__fsqrt_rn(__fdiv_rn(vi, c2)), eps));
+            float wi = __fsub_rn(w[i], step);
+            w[i] = wi;
+            if (!isfinite(wi)) atomicAdd(nonfinite, 1u);
+            ui = __fsqrt_rn(vi);
+        }
+    }
+    float max_m = block_reduce(fabsf(mi), 1, red);
+    float max_u = block_reduce(ui, 1, red);
+    if (threadIdx.x == 0) { sm[blockIdx.x] = max_m; su[blockIdx.x] = max_u; }
+    if (live) { qm[i] = enc_m(mi, max_m); qv[i] = enc_u(ui, max_u); }
+}
 // Soma dos quadrados do gradiente em double, por bloco (256 threads); conta não finitos.
 extern "C" __global__ void sumsq(const float* g, long long count, double* partial,
                                  unsigned int* nonfinite) {
