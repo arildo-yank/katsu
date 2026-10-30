@@ -234,6 +234,139 @@ fn load_corpus(path: &Path, tok: &BpeTokenizer) -> Result<Vec<u16>, Box<dyn std:
     Ok(ids)
 }
 
+/// Corpus da fase de pré-treino/adaptação. Um arquivo vai inteiro para a memória (`load_corpus`);
+/// um diretório é a saída do `prepare_v2_corpus.py` (`manifest.json` + `shards/*.bin`), lida do disco
+/// janela a janela, para que 1B ou 20B tokens não precisem caber na RAM.
+enum Corpus {
+    Memory(Vec<u16>),
+    Shards(Vec<Shard>),
+}
+struct Shard {
+    file: File,
+    tokens: usize,
+}
+#[derive(Deserialize)]
+struct ManifestShard {
+    path: String,
+    tokens: usize,
+}
+#[derive(Deserialize)]
+struct ManifestSource {
+    shards: Vec<ManifestShard>,
+}
+#[derive(Deserialize)]
+struct Manifest {
+    total_tokens: usize,
+    sources: std::collections::BTreeMap<String, ManifestSource>,
+}
+
+impl Corpus {
+    fn open(path: &Path, tok: &BpeTokenizer) -> Result<Self, Box<dyn std::error::Error>> {
+        if !path.is_dir() {
+            return Ok(Corpus::Memory(load_corpus(path, tok)?));
+        }
+        let manifest: Manifest =
+            serde_json::from_reader(BufReader::new(File::open(path.join("manifest.json"))?))?;
+        let mut shards = Vec::new();
+        // BTreeMap e a ordem do manifesto: a mesma lista de shards a cada abertura (retomada).
+        for source in manifest.sources.values() {
+            for s in &source.shards {
+                let relative = Path::new(&s.path);
+                if relative.is_absolute()
+                    || relative
+                        .components()
+                        .any(|c| !matches!(c, std::path::Component::Normal(_)))
+                    || relative.extension().is_none_or(|e| e != "bin")
+                {
+                    return Err(format!("manifest shard path not allowed: {}", s.path).into());
+                }
+                let file = File::open(path.join(relative))?;
+                if file.metadata()?.len() != 2 * s.tokens as u64 {
+                    return Err(format!("shard size differs from the manifest: {}", s.path).into());
+                }
+                check_vocabulary(&file, s.tokens, tok).map_err(|e| format!("{}: {e}", s.path))?;
+                if s.tokens >= 257 {
+                    shards.push(Shard {
+                        file,
+                        tokens: s.tokens,
+                    });
+                }
+            }
+        }
+        if shards.iter().map(|s| s.tokens).sum::<usize>() > manifest.total_tokens {
+            return Err("shards hold more tokens than the manifest total".into());
+        }
+        Ok(Corpus::Shards(shards))
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Corpus::Memory(ids) => ids.len(),
+            Corpus::Shards(shards) => shards.iter().map(|s| s.tokens).sum(),
+        }
+    }
+
+    /// Uma janela aleatória. Em memória, o mesmo sorteio de antes. Em shards, o início é uniforme
+    /// sobre todas as posições válidas, então cada fonte entra na proporção dos seus tokens (a
+    /// mistura do manifesto), e nenhuma janela cruza a fronteira entre dois shards.
+    fn sample(&self, rng: &mut SplitMix64) -> Result<Vec<usize>, Box<dyn std::error::Error>> {
+        match self {
+            Corpus::Memory(ids) => Ok(window(ids, rng.below(ids.len() - 256))),
+            Corpus::Shards(shards) => {
+                let positions: usize = shards.iter().map(|s| s.tokens - 256).sum();
+                let mut start = rng.below(positions);
+                for shard in shards {
+                    if start < shard.tokens - 256 {
+                        use std::os::unix::fs::FileExt;
+                        let mut bytes = [0u8; 2 * 257];
+                        shard.file.read_exact_at(&mut bytes, 2 * start as u64)?;
+                        return Ok(bytes
+                            .chunks_exact(2)
+                            .map(|b| u16::from_le_bytes([b[0], b[1]]) as usize)
+                            .collect());
+                    }
+                    start -= shard.tokens - 256;
+                }
+                unreachable!("start is below the total of positions")
+            }
+        }
+    }
+
+    /// Arquivo que identifica os dados na assinatura de retomada. O manifesto traz o SHA-256 de cada
+    /// shard, então não é preciso ler gigabytes para isso.
+    fn fingerprint_path(path: &Path) -> std::path::PathBuf {
+        if path.is_dir() {
+            path.join("manifest.json")
+        } else {
+            path.to_path_buf()
+        }
+    }
+}
+
+/// Lê o shard uma vez, em blocos, e recusa IDs fora do vocabulário (mesma regra do `load_corpus`).
+fn check_vocabulary(
+    file: &File,
+    tokens: usize,
+    tok: &BpeTokenizer,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::Read;
+    let mut reader = BufReader::with_capacity(1 << 20, file);
+    let mut bytes = vec![0u8; 1 << 20];
+    let mut left = 2 * tokens;
+    while left > 0 {
+        let chunk = &mut bytes[..left.min(1 << 20)];
+        reader.read_exact(chunk)?;
+        if chunk
+            .chunks_exact(2)
+            .any(|b| u16::from_le_bytes([b[0], b[1]]) as usize >= tok.vocab_size())
+        {
+            return Err("corpus token outside the tokenizer vocabulary".into());
+        }
+        left -= chunk.len();
+    }
+    Ok(())
+}
+
 /// Janela de 257 tokens (256 de entrada e o alvo deslocado) como IDs do modelo.
 fn window(corpus: &[u16], start: usize) -> Vec<usize> {
     corpus[start..start + 257]
@@ -384,9 +517,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let train = examples(&a[2], &tok, 256)?;
     let eval = examples(&a[3], &tok, 256)?;
     let corpus = if adapt > 0 {
-        load_corpus(Path::new(&a[4]), &tok)?
+        Corpus::open(Path::new(&a[4]), &tok)?
     } else {
-        Vec::new()
+        Corpus::Memory(Vec::new())
     };
     // KATSU_CORPUS_EVAL: corpus de validação (.bin ou texto), medido em janelas fixas antes,
     // a cada checkpoint e no fim da fase de corpus. Só no motor GPU.
@@ -414,7 +547,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if adapt > 0 && corpus.len() < 257 {
         return Err("corpus too short".into());
     }
-    let signature = json!({"data":fingerprint(&[base.join("tokenizer.bpe").as_path(), Path::new(&a[2]), Path::new(&a[3]), Path::new(&a[4])])?,
+    let signature = json!({"data":fingerprint(&[base.join("tokenizer.bpe").as_path(), Path::new(&a[2]), Path::new(&a[3]), Corpus::fingerprint_path(Path::new(&a[4])).as_path()])?,
         "steps":steps,"adapt":adapt,"peak_sft_lr":learning_rate,"peak_corpus_lr":corpus_lr,
         "warmup_ratio":warmup_ratio,"min_lr_ratio":min_lr_ratio,"config":[c.vocab_size,c.block_size,c.embed_dim,c.layers,c.heads],
         "batch":batch});
@@ -587,8 +720,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let step_started = std::time::Instant::now();
         let lr = scheduled_lr(corpus_lr, step, adapt, warmup_ratio, min_lr_ratio);
         adam.set_learning_rate(lr)?;
-        let i = rng.below(corpus.len() - 256);
-        let loss = c.loss_batch_with_backend(&params, &[&window(&corpus, i)], backend.clone())?;
+        let loss =
+            c.loss_batch_with_backend(&params, &[&corpus.sample(&mut rng)?], backend.clone())?;
         let before = moved();
         let (next, value, norm) = update(
             std::mem::take(&mut params),
@@ -718,7 +851,7 @@ mod gpu {
         pub resume_rng: u64,
         pub train: &'a [Example],
         pub eval: &'a [Example],
-        pub corpus: &'a [u16],
+        pub corpus: &'a Corpus,
         pub corpus_eval: &'a [u16],
         pub corpus_eval_windows: usize,
         pub deadline: Option<f64>,
@@ -895,8 +1028,8 @@ mod gpu {
             t.set_learning_rate(lr)?;
             // r.batch janelas aleatórias de 256 tokens; com batch 1, o mesmo sorteio de antes.
             let windows: Vec<Vec<usize>> = (0..r.batch)
-                .map(|_| window(r.corpus, rng.below(r.corpus.len() - 256)))
-                .collect();
+                .map(|_| r.corpus.sample(&mut rng))
+                .collect::<Result<_, _>>()?;
             let refs: Vec<&[usize]> = windows.iter().map(Vec::as_slice).collect();
             let loss = t.loss_and_grad(&SftBatch::windows(&refs)?)?;
             let norm = step(&mut t, loss)?;
@@ -1076,6 +1209,70 @@ mod tests {
         let w = window(&corpus, 40);
         assert_eq!(w.len(), 257);
         assert_eq!((w[0], w[256]), (40, 296));
+    }
+    #[test]
+    fn shard_directory_samples_windows_inside_one_shard() {
+        let tok = BpeTokenizer::train("o atacante recua e o zagueiro sobe ", 300).unwrap();
+        let dir = std::env::temp_dir().join(format!("katsu-shards-{}", std::process::id()));
+        fs::create_dir_all(dir.join("shards")).unwrap();
+        // Shard a: 300 tokens de ID 1; shard b: 900 de ID 2. Posições válidas: 44 e 644.
+        let write = |name: &str, id: u16, n: usize| {
+            let bytes: Vec<u8> = (0..n).flat_map(|_| id.to_le_bytes()).collect();
+            fs::write(dir.join("shards").join(name), bytes).unwrap();
+        };
+        write("a-00000.bin", 1, 300);
+        write("b-00000.bin", 2, 900);
+        let manifest = |a_path: &str, a_tokens: usize| {
+            json!({"total_tokens":1200,"sources":{
+                "a":{"shards":[{"path":a_path,"tokens":a_tokens}]},
+                "b":{"shards":[{"path":"shards/b-00000.bin","tokens":900}]}}})
+            .to_string()
+        };
+        fs::write(
+            dir.join("manifest.json"),
+            manifest("shards/a-00000.bin", 300),
+        )
+        .unwrap();
+        let corpus = Corpus::open(&dir, &tok).unwrap();
+        assert_eq!(corpus.len(), 1200);
+        let mut rng = SplitMix64(7);
+        let mut from_a = 0;
+        for _ in 0..2000 {
+            let w = corpus.sample(&mut rng).unwrap();
+            assert_eq!(w.len(), 257);
+            assert!(w.iter().all(|&id| id == w[0]), "window crossed two shards");
+            from_a += usize::from(w[0] == 1);
+        }
+        // 44 de 688 posições: ~128 de 2.000.
+        assert!((80..180).contains(&from_a), "{from_a}");
+        assert_eq!(
+            Corpus::fingerprint_path(&dir),
+            dir.join("manifest.json"),
+            "resume signature reads the manifest, not the shards"
+        );
+
+        fs::write(dir.join("manifest.json"), manifest("../a-00000.bin", 300)).unwrap();
+        assert!(Corpus::open(&dir, &tok).is_err(), "path outside the corpus");
+        fs::write(
+            dir.join("manifest.json"),
+            manifest("shards/a-00000.bin", 299),
+        )
+        .unwrap();
+        assert!(
+            Corpus::open(&dir, &tok).is_err(),
+            "size differs from manifest"
+        );
+        write("a-00000.bin", 60_000, 300);
+        fs::write(
+            dir.join("manifest.json"),
+            manifest("shards/a-00000.bin", 300),
+        )
+        .unwrap();
+        assert!(
+            Corpus::open(&dir, &tok).is_err(),
+            "id outside the vocabulary"
+        );
+        fs::remove_dir_all(dir).unwrap();
     }
     #[test]
     fn warmup_cosine_endpoints() {
