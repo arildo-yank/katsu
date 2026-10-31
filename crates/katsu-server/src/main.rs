@@ -5,7 +5,7 @@ use axum::{
     Json, Router,
 };
 use katsu_core::{load_params, BpeTokenizer, GenerationOptions, KatsuLmConfig, Tensor};
-use katsu_rag::{Document, Index};
+use katsu_rag::{Document, Index, Synonyms};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
@@ -486,7 +486,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let chunk: usize = std::env::var("KATSU_RAG_CHUNK")
         .unwrap_or_else(|_| "600".into())
         .parse()?;
-    let mut rag = Index::new(chunk);
+    // KATSU_RAG_SYNONYMS: todos (padrão), sem-consultor ou nenhum (katsu-rag/src/synonyms.rs).
+    let synonyms = Synonyms::parse(&std::env::var("KATSU_RAG_SYNONYMS").unwrap_or_default())?;
+    let mut rag = Index::new(chunk).with_synonyms(synonyms);
     let rag_path = std::env::var("KATSU_RAG_DOCS")
         .ok()
         .filter(|p| !p.is_empty())

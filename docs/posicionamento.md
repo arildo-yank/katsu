@@ -79,6 +79,10 @@ Em ordem:
 5. **Várias GPUs:** ver `ARANDU/docs/DDP_ROADMAP_V3.md`, ~3–4 semanas (estimativa).
 6. **Outra GPU além da NVIDIA:** para reduzir a dependência de um fabricante. Projeto grande, sem
    estimativa.
+7. **Katsu Embedding Model (busca por sentido):** um codificador treinado no próprio Katsu, sem
+   PyTorch nem pesos de terceiros. A busca por palavras parou em 12/26 no 1.º trecho na régua da
+   NR-12, e o dicionário de sinônimos não mudou isso (31/10/2026). Ver [roadmap](roadmap.md),
+   seção 5. Semanas.
 
 ## A frase para investidor ou órgão público
 

@@ -79,4 +79,22 @@ Não anunciar causalidade ou explicação exata das decisões.
 Critério: benchmarks reproduzíveis e uma demonstração de inferência com limites
 de recursos definidos. Nenhum ganho competitivo é presumido.
 
+## 5. Katsu Embedding Model (busca por sentido)
+
+A busca do RAG é lexical (BM25). Na régua da NR-12 (ARANDU/docs/regua_busca_nr12.json, 26
+perguntas), o trecho certo vem em 1.º em 12 e nos 3 primeiros em 18 (31/10/2026). Um dicionário de
+sinônimos escrito à mão (`katsu-rag/src/synonyms.rs`) levou a 12 e 19, e 1 de 8 na régua do
+consultor, sem ganho: os erros que sobram pedem sentido ("placas avisando dos riscos" casa com outra
+"placa" da norma antes de "sinalização"). Usar um codificador pronto (e5, PyTorch) foi recusado:
+pesos e framework de terceiros.
+
+- [ ] Encoder no Katsu: atenção bidirecional e média dos estados (o motor só tem o GPT causal).
+- [ ] Pares pergunta → trecho próprios para treino contrastivo, sem texto de cliente e sem livro comercial.
+- [ ] Treino contrastivo no Katsu (perda InfoNCE com negativos do lote).
+- [ ] Índice de vetores no `katsu-rag`, somado ao BM25 (busca híbrida), com a mesma régua.
+- [ ] Régua cega: perguntas escritas por quem não viu o índice nem o treino.
+
+Critério: o trecho certo nos 3 primeiros sobe na régua cega contra o BM25 com sinônimos, sem
+nenhum peso de terceiros. Estimativa, sem nada implementado: semanas, não dias.
+
 Entrega incremental e limites atuais: [Escala nativa Rust](scaling.md).

@@ -4,6 +4,9 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+pub mod synonyms;
+pub use synonyms::Synonyms;
+
 /// Documento como entra e como é gravado (JSONL, um por linha).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -32,6 +35,8 @@ pub struct Hit<'a> {
 
 const K1: f32 = 1.2;
 const B: f32 = 0.75;
+/// Peso de um sinônimo no escore, contra 1 da palavra que está na pergunta.
+const SYNONYM_WEIGHT: f32 = 0.5;
 const STOPWORDS: &[&str] = &[
     "a", "ao", "aos", "as", "com", "como", "da", "das", "de", "do", "dos", "e", "em", "na", "nas",
     "no", "nos", "o", "os", "ou", "para", "pela", "pelas", "pelo", "pelos", "por", "que", "se",
@@ -196,6 +201,7 @@ pub struct Index {
     postings: HashMap<String, Vec<(u32, u32)>>,
     total_length: u64,
     max_chars: usize,
+    synonyms: Synonyms,
 }
 
 impl Index {
@@ -204,6 +210,12 @@ impl Index {
             max_chars,
             ..Self::default()
         }
+    }
+
+    /// Quais grupos de sinônimos a busca usa (padrão: todos).
+    pub fn with_synonyms(mut self, synonyms: Synonyms) -> Self {
+        self.synonyms = synonyms;
+        self
     }
 
     pub fn len(&self) -> usize {
@@ -259,26 +271,43 @@ impl Index {
         let mut scores: HashMap<u32, f32> = HashMap::new();
         let mut matched: HashMap<u32, f32> = HashMap::new();
         let mut total_idf = 0.0;
-        let mut seen = Vec::new();
-        for term in terms(query) {
-            if seen.contains(&term) {
-                continue;
+        // Palavras da pergunta com peso 1; os sinônimos delas (synonyms.rs) com SYNONYM_WEIGHT, só
+        // no escore. A cobertura conta só as palavras da pergunta: o roteamento não muda.
+        let asked = terms(query);
+        let mut weighted: Vec<(String, f32)> = Vec::new();
+        for term in &asked {
+            if !weighted.iter().any(|(t, _)| t == term) {
+                weighted.push((term.clone(), 1.0));
             }
+        }
+        for term in &asked {
+            for other in synonyms::equivalents(term, self.synonyms) {
+                if !weighted.iter().any(|(t, _)| t == other) {
+                    weighted.push((other.clone(), SYNONYM_WEIGHT));
+                }
+            }
+        }
+        for (term, weight) in weighted {
+            let original = weight == 1.0;
             let Some(list) = self.postings.get(&term) else {
-                total_idf += ((n + 0.5) / 0.5 + 1.0).ln();
-                seen.push(term);
+                if original {
+                    total_idf += ((n + 0.5) / 0.5 + 1.0).ln();
+                }
                 continue;
             };
             let idf = ((n - list.len() as f32 + 0.5) / (list.len() as f32 + 0.5) + 1.0).ln();
-            total_idf += idf;
+            if original {
+                total_idf += idf;
+            }
             for &(id, tf) in list {
                 let tf = tf as f32;
                 let length = self.lengths[id as usize] as f32;
                 let norm = tf * (K1 + 1.0) / (tf + K1 * (1.0 - B + B * length / average));
-                *scores.entry(id).or_default() += idf * norm;
-                *matched.entry(id).or_default() += idf;
+                *scores.entry(id).or_default() += weight * idf * norm;
+                if original {
+                    *matched.entry(id).or_default() += idf;
+                }
             }
-            seen.push(term);
         }
         let mut ranked: Vec<(u32, f32)> = scores.into_iter().filter(|(_, s)| *s > 0.0).collect();
         ranked.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
@@ -287,7 +316,7 @@ impl Index {
             .take(k)
             .map(|(id, score)| Hit {
                 score,
-                coverage: matched[&id] / total_idf,
+                coverage: matched.get(&id).copied().unwrap_or(0.0) / total_idf,
                 chunk: &self.chunks[id as usize],
             })
             .collect()
@@ -314,6 +343,64 @@ mod tests {
             title: title.into(),
             text: text.into(),
         }
+    }
+
+    fn wiring_index(synonyms: Synonyms) -> Index {
+        let mut index = Index::new(320).with_synonyms(synonyms);
+        index.add(&doc(
+            "a",
+            "Elétrica",
+            "Os condutores de alimentação devem ter isolamento.",
+        ));
+        index.add(&doc("b", "Piso", "O piso deve ser resistente às cargas."));
+        index.add(&doc(
+            "c",
+            "Fios",
+            "Os fios soltos devem ser presos com abraçadeira.",
+        ));
+        index
+    }
+
+    #[test]
+    fn a_synonym_finds_the_document_word() {
+        let index = wiring_index(Synonyms::All);
+        let hits = index.search("cuidados com o cabo de alimentação", 3);
+        assert_eq!(hits[0].chunk.doc, "a");
+        // Sem sinônimos, "cabo" não casa com nada.
+        let plain = wiring_index(Synonyms::Off);
+        assert!(plain.search("cabo", 3).is_empty());
+        assert_eq!(index.search("cabo", 3).len(), 2);
+    }
+
+    #[test]
+    fn the_asked_word_outweighs_its_synonym() {
+        let index = wiring_index(Synonyms::All);
+        let hits = index.search("fios", 3);
+        assert_eq!(hits[0].chunk.doc, "c");
+        assert_eq!(hits[1].chunk.doc, "a");
+        assert!(hits[0].score > hits[1].score);
+    }
+
+    #[test]
+    fn coverage_counts_only_the_asked_words() {
+        let index = wiring_index(Synonyms::All);
+        let by_synonym = index.search("cabo", 3);
+        assert!(by_synonym.iter().all(|h| h.coverage == 0.0));
+        let exact = index.search("piso", 1);
+        assert_eq!(exact[0].coverage, 1.0);
+    }
+
+    #[test]
+    fn without_consultor_drops_only_those_groups() {
+        assert!(!synonyms::equivalents("sensor", Synonyms::All).is_empty());
+        assert!(synonyms::equivalents("sensor", Synonyms::WithoutConsultor).is_empty());
+        assert!(!synonyms::equivalents("fio", Synonyms::WithoutConsultor).is_empty());
+        assert!(synonyms::equivalents("fio", Synonyms::Off).is_empty());
+        assert_eq!(
+            Synonyms::parse("sem-consultor"),
+            Ok(Synonyms::WithoutConsultor)
+        );
+        assert!(Synonyms::parse("talvez").is_err());
     }
 
     #[test]
