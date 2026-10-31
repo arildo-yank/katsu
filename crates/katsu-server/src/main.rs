@@ -519,6 +519,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/chat/completions", post(openai::chat_completions))
         .route("/v1/models", get(openai::models))
         .route("/math", post(math::handle))
+        .route("/math/ask", post(math::ask))
         .layer(DefaultBodyLimit::max(32768))
         .route(
             "/rag/documents",

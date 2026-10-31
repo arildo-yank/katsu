@@ -7,6 +7,13 @@
 
 use std::{collections::HashMap, fmt};
 
+mod integral;
+mod latex;
+mod prompt;
+pub use integral::antiderivative;
+pub use latex::latex;
+pub use prompt::{understand, Intent};
+
 const MAX_LEN: usize = 500;
 const MAX_DEPTH: usize = 48;
 const MAX_INTEGRAL_CALLS: usize = 2_000_000;
@@ -261,6 +268,7 @@ fn add(a: Expr, c: Expr) -> Expr {
     match (a, c) {
         (Num(x), Num(y)) => Num(x + y),
         (Num(z), e) | (e, Num(z)) if z == 0.0 => e,
+        (a, Neg(c)) => Sub(b(a), c),
         (a, c) => Add(b(a), b(c)),
     }
 }

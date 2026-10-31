@@ -1,7 +1,10 @@
 //! Rota `POST /math`: entrada matemática direta para o `katsu-math`, sem o modelo. A resposta diz o método
 //! e se o resultado é aproximado; o que o motor recusa volta como erro 400, nunca como número.
 use axum::{extract::rejection::JsonRejection, http::StatusCode, Json};
-use katsu_math::{bisect, diff, eval, integrate, newton, parse, rk4, Expr, Vars};
+use katsu_math::{
+    antiderivative, bisect, diff, eval, integrate, latex, newton, parse, rk4, understand, Expr,
+    Intent, Vars,
+};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{collections::HashMap, time::Instant};
@@ -32,6 +35,11 @@ pub(super) enum Request {
         to: f64,
         #[serde(default = "default_tol")]
         tol: f64,
+    },
+    Antiderivative {
+        expr: String,
+        #[serde(default = "default_var")]
+        var: String,
     },
     Root {
         expr: String,
@@ -72,6 +80,54 @@ fn answer(
     json!({"op": op, "input": input.to_string(), "result": result, "method": method, "approximate": approximate, "note": note})
 }
 
+/// Termos de uma soma, cada um com o sinal: é o que vira passo a passo.
+fn terms(e: &Expr) -> Vec<(bool, &Expr)> {
+    fn walk<'a>(e: &'a Expr, minus: bool, out: &mut Vec<(bool, &'a Expr)>) {
+        match e {
+            Expr::Add(a, c) => {
+                walk(a, minus, out);
+                walk(c, minus, out);
+            }
+            Expr::Sub(a, c) => {
+                walk(a, minus, out);
+                walk(c, !minus, out);
+            }
+            Expr::Neg(a) => walk(a, !minus, out),
+            term => out.push((minus, term)),
+        }
+    }
+    let mut out = Vec::new();
+    walk(e, false, &mut out);
+    out
+}
+
+fn group_latex(e: &Expr, minus: bool) -> String {
+    if minus && matches!(e, Expr::Add(..) | Expr::Sub(..)) {
+        format!("\\left({}\\right)", latex(e))
+    } else {
+        latex(e)
+    }
+}
+
+/// Parênteses em volta de soma, para o símbolo da integral alcançar a expressão inteira.
+fn wrapped(e: &Expr) -> String {
+    if matches!(e, Expr::Add(..) | Expr::Sub(..)) {
+        format!("\\left({}\\right)", latex(e))
+    } else {
+        latex(e)
+    }
+}
+
+fn number_latex(value: f64) -> String {
+    let rounded = format!("{value:.10}");
+    let trimmed = rounded.trim_end_matches('0').trim_end_matches('.');
+    if value != 0.0 && (value.abs() >= 1e15 || value.abs() < 1e-6) {
+        latex(&Expr::Num(value))
+    } else {
+        trimmed.replace('.', "{,}")
+    }
+}
+
 fn solve(req: Request) -> Result<Value, String> {
     let none = Vars::new();
     match req {
@@ -102,6 +158,16 @@ fn solve(req: Request) -> Result<Value, String> {
                 format!("Em relação a {var}."),
             );
             out["value_at"] = json!(value);
+            let mut steps = Vec::new();
+            for (minus, term) in terms(&e) {
+                let sign = if minus { "-" } else { "" };
+                steps.push(format!(
+                    "{sign}\\frac{{d}}{{d{var}}}\\left({}\\right) = {sign}{}",
+                    latex(term),
+                    group_latex(&diff(term, &var)?, minus)
+                ));
+            }
+            out["steps"] = json!(steps);
             Ok(out)
         }
         Request::Integrate {
@@ -124,6 +190,32 @@ fn solve(req: Request) -> Result<Value, String> {
                 true,
                 format!("Aproximação numérica, tolerância pedida de {tol:e}."),
             ))
+        }
+        Request::Antiderivative { expr, var } => {
+            let e = expression(&expr)?;
+            let p = antiderivative(&e, &var)?;
+            let mut out = answer(
+                &e,
+                "antiderivative",
+                json!(format!("{p} + C")),
+                "Primitiva em forma fechada",
+                false,
+                "Conferida derivando o resultado em vários pontos.".into(),
+            );
+            let mut steps = Vec::new();
+            for (minus, term) in terms(&e) {
+                let part = antiderivative(term, &var)?;
+                let sign = if minus { "-" } else { "" };
+                steps.push(format!(
+                    "{sign}\\int {}\\,d{var} = {sign}{}",
+                    wrapped(term),
+                    group_latex(&part, minus)
+                ));
+            }
+            out["steps"] = json!(steps);
+            out["input_latex"] = json!(format!("\\int {}\\,d{var}", wrapped(&e)));
+            out["result_latex"] = json!(format!("{} + C", latex(&p)));
+            Ok(out)
         }
         Request::Root {
             expr,
@@ -185,6 +277,175 @@ fn solve(req: Request) -> Result<Value, String> {
     }
 }
 
+/// Só para as operações sem LaTeX próprio: entrada e resultado do jeito que o motor calculou.
+fn add_latex(out: &mut Value) {
+    if out.get("result_latex").is_some() {
+        return;
+    }
+    if let Some(e) = out["input"].as_str().and_then(|text| parse(text).ok()) {
+        let tex = latex(&e);
+        out["input_latex"] = json!(match out["op"].as_str() {
+            Some("derive") => format!("\\frac{{d}}{{dx}}\\left({tex}\\right)"),
+            _ => tex,
+        });
+    }
+    out["result_latex"] = match &out["result"] {
+        Value::Number(n) => json!(number_latex(n.as_f64().unwrap_or(0.0))),
+        Value::String(text) => parse(text).map(|e| json!(latex(&e))).unwrap_or(Value::Null),
+        _ => Value::Null,
+    };
+}
+
+const FOOTER: &str = "Calculado pelo motor do Katsu neste computador, sem usar um modelo de IA.";
+
+fn latex_block(tex: &str) -> String {
+    format!("$$\n{tex}\n$$")
+}
+
+/// Resposta do pedido escrito, em Markdown com LaTeX, sempre mostrando o que foi entendido.
+fn explain(intent: Intent) -> Value {
+    let (understood, result): (String, Result<(String, bool, String), String>) = match intent {
+        Intent::Calculate(e) => (
+            latex(&e),
+            eval(&e, &Vars::new()).map(|v| (number_latex(v), false, String::new())),
+        ),
+        Intent::Antiderivative { expr, var } => (
+            format!("\\int {}\\,d{var}", wrapped(&expr)),
+            antiderivative(&expr, &var).map(|p| {
+                (
+                    format!("{} + C", latex(&p)),
+                    false,
+                    "A primitiva foi conferida derivando o resultado.".to_owned(),
+                )
+            }),
+        ),
+        Intent::Definite {
+            expr,
+            var,
+            from,
+            to,
+        } => (
+            format!(
+                "\\int_{{{}}}^{{{}}} {}\\,d{var}",
+                latex(&Expr::Num(from)),
+                latex(&Expr::Num(to)),
+                wrapped(&expr)
+            ),
+            integrate(&expr, &var, from, to, DEFAULT_TOL, &Vars::new()).map(|v| {
+                (
+                    format!("\\approx {}", number_latex(v)),
+                    true,
+                    format!("Aproximação numérica, tolerância de {DEFAULT_TOL:e}."),
+                )
+            }),
+        ),
+        Intent::Derivative { expr, var, at } => (
+            format!("\\frac{{d}}{{d{var}}}\\left({}\\right)", latex(&expr)),
+            diff(&expr, &var).and_then(|d| {
+                let base = latex(&d);
+                match at {
+                    None => Ok((base, false, String::new())),
+                    Some(x) => eval(&d, &Vars::from([(var.clone(), x)])).map(|v| {
+                        (
+                            format!(
+                                "{base} \\quad\\text{{; em }} {var} = {} \\text{{: }} {}",
+                                number_latex(x),
+                                number_latex(v)
+                            ),
+                            false,
+                            String::new(),
+                        )
+                    }),
+                }
+            }),
+        ),
+        Intent::Root { expr, var } => (
+            format!("{} = 0", latex(&expr)),
+            root_search(&expr, &var).map(|v| {
+                (
+                    format!("{var} \\approx {}", number_latex(v)),
+                    true,
+                    "Uma raiz encontrada numericamente; pode haver outras.".to_owned(),
+                )
+            }),
+        ),
+    };
+    match result {
+        Ok((tex, approximate, note)) => {
+            let mut markdown = format!(
+                "Entendi assim:\n\n{}\n\nResultado:\n\n{}\n\nEm LaTeX: `{tex}`\n\n",
+                latex_block(&understood),
+                latex_block(&tex)
+            );
+            if !note.is_empty() {
+                markdown.push_str(&format!("{note} "));
+            }
+            markdown.push_str(FOOTER);
+            json!({"understood": true, "ok": true, "markdown": markdown, "input_latex": understood, "result_latex": tex, "approximate": approximate})
+        }
+        Err(why) => {
+            let markdown = format!(
+                "Entendi assim:\n\n{}\n\nNão consegui calcular: {why}.\n\n{FOOTER}",
+                latex_block(&understood)
+            );
+            json!({"understood": true, "ok": false, "markdown": markdown, "input_latex": understood, "error": why})
+        }
+    }
+}
+
+/// Procura uma troca de sinal em janelas crescentes em volta de zero e refina por bisseção.
+fn root_search(e: &Expr, var: &str) -> Result<f64, String> {
+    let none = Vars::new();
+    let value = |x: f64| eval(e, &Vars::from([(var.to_owned(), x)]));
+    let mut last: Option<(f64, f64)> = None;
+    for i in 0..=2000 {
+        let x = f64::from(i) * 0.05;
+        for point in [x, -x] {
+            if let Ok(v) = value(point) {
+                if v == 0.0 {
+                    return Ok(point);
+                }
+            }
+        }
+        if let (Ok(here), Some((px, pv))) = (value(x), last) {
+            if here.signum() != pv.signum() {
+                if let Ok(root) = bisect(e, var, px, x, 1e-12, &none) {
+                    return Ok(root);
+                }
+            }
+        }
+        if let (Ok(a), Ok(c)) = (value(-x), value(-x - 0.05)) {
+            if a.signum() != c.signum() {
+                if let Ok(root) = bisect(e, var, -x - 0.05, -x, 1e-12, &none) {
+                    return Ok(root);
+                }
+            }
+        }
+        last = value(x).ok().map(|v| (x, v));
+    }
+    Err("não encontrei raiz real entre -100 e 100".into())
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Ask {
+    text: String,
+}
+
+/// `POST /math/ask`: pedido escrito. `understood: false` manda o texto seguir como conversa comum.
+pub(super) async fn ask(
+    body: Result<Json<Ask>, JsonRejection>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let Json(req) = body.map_err(|why| failure(StatusCode::BAD_REQUEST, &why.body_text()))?;
+    let out = tokio::task::spawn_blocking(move || match understand(&req.text) {
+        Some(intent) => explain(intent),
+        None => json!({"understood": false}),
+    })
+    .await
+    .map_err(|_| failure(StatusCode::INTERNAL_SERVER_ERROR, "math worker failed"))?;
+    Ok(Json(out))
+}
+
 fn failure(code: StatusCode, message: &str) -> (StatusCode, Json<Value>) {
     (code, Json(json!({"error": message})))
 }
@@ -198,6 +459,7 @@ pub(super) async fn handle(
         .await
         .map_err(|_| failure(StatusCode::INTERNAL_SERVER_ERROR, "math worker failed"))?;
     let mut out = solved.map_err(|why| failure(StatusCode::BAD_REQUEST, &why))?;
+    add_latex(&mut out);
     out["elapsed_us"] = json!(started.elapsed().as_micros() as u64);
     Ok(Json(out))
 }
@@ -233,6 +495,38 @@ mod tests {
         assert_eq!(n["method"], "Newton-Raphson");
         let o = run(json!({"op":"ode","expr":"-2 * y","t0":0,"y0":1,"t1":1,"steps":100})).unwrap();
         assert!((o["result"].as_f64().unwrap() - (-2f64).exp()).abs() < 1e-7);
+    }
+
+    #[test]
+    fn breaks_sums_into_steps() {
+        let out = run(json!({"op":"antiderivative","expr":"x^3 - 2 * x"})).unwrap();
+        assert_eq!(out["result_latex"], "\\frac{x^{4}}{4} - x^{2} + C");
+        assert_eq!(out["steps"][0], "\\int x^{3}\\,dx = \\frac{x^{4}}{4}");
+        assert_eq!(out["steps"][1], "-\\int 2 x\\,dx = -x^{2}");
+        let d = run(json!({"op":"derive","expr":"x^2 + sin(x)"})).unwrap();
+        assert_eq!(d["steps"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn answers_written_requests_in_latex() {
+        let out = explain(understand("faz a integral de X3 -2x").unwrap());
+        assert_eq!(out["ok"], true);
+        assert_eq!(out["input_latex"], "\\int \\left(x^{3} - 2 x\\right)\\,dx");
+        assert_eq!(out["result_latex"], "\\frac{x^{4}}{4} - x^{2} + C");
+        assert!(out["markdown"].as_str().unwrap().contains("$$"));
+        let hard = explain(understand("integral de exp(-x^2)").unwrap());
+        assert_eq!(hard["ok"], false);
+        assert!(understand("qual é a capital do Brasil?").is_none());
+        let root = explain(understand("resolva x^2 - 2 = 0").unwrap());
+        assert!(
+            root["result_latex"]
+                .as_str()
+                .unwrap()
+                .contains("1{,}4142135624"),
+            "{root}"
+        );
+        let none = explain(understand("raizes de x^2 + 1").unwrap());
+        assert_eq!(none["ok"], false);
     }
 
     #[test]
