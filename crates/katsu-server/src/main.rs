@@ -480,10 +480,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.block_size
     );
     // KATSU_RAG_DOCS: biblioteca em JSONL ({"id","title","text"} por linha), lida aqui e acrescida
-    // pelo POST /rag/documents. KATSU_RAG_CHUNK: tamanho máximo do trecho em caracteres (320 cabe
-    // no contexto de 256 tokens com a pergunta e a resposta).
+    // pelo POST /rag/documents. KATSU_RAG_CHUNK: tamanho máximo do trecho em caracteres. 600 na
+    // régua da NR-12 (ARANDU/docs/regua_busca_nr12.json, 31/10/2026): trecho certo em 1.º em 12/26 e
+    // nos 3 primeiros em 18/26, contra 10 e 14 com 320; nenhum prompt do /rag/ask passou de 256 tokens.
     let chunk: usize = std::env::var("KATSU_RAG_CHUNK")
-        .unwrap_or_else(|_| "320".into())
+        .unwrap_or_else(|_| "600".into())
         .parse()?;
     let mut rag = Index::new(chunk);
     let rag_path = std::env::var("KATSU_RAG_DOCS")

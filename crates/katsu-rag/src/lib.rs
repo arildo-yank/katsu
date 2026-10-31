@@ -36,17 +36,30 @@ const STOPWORDS: &[&str] = &[
     "a", "ao", "aos", "as", "com", "como", "da", "das", "de", "do", "dos", "e", "em", "na", "nas",
     "no", "nos", "o", "os", "ou", "para", "pela", "pelas", "pelo", "pelos", "por", "que", "se",
     "um", "uma", "umas", "uns", "qual", "quais", "quem", "quando", "onde", "foi", "era", "ser",
-    "seu", "sua", "seus", "suas", "the", "of", "and",
+    "seu", "sua", "seus", "suas", "the", "of", "and", "deve", "devem", "pode", "podem", "posso",
+    "precisa", "precisam", "sobre", "este", "esta", "estes", "estas", "esse", "essa", "isso",
+    "ter", "tem",
 ];
-// "sao" fica de fora de propósito: é o verbo "são", mas também o "São" de São Paulo.
+// "sao" fica de fora de propósito: é o verbo "são", mas também o "São" de São Paulo. "nao" também:
+// "não deve" e "deve" são regras opostas.
 
-/// Palavras de busca: minúsculas, sem acento, só letras e dígitos, sem palavras vazias.
+/// Palavras com mais letras que isto viram o radical: "proteção" e "proteções" casam ("protec").
+const STEM: usize = 6;
+
+/// Palavras de busca: minúsculas, sem acento, só letras e dígitos, sem palavras vazias, e as longas
+/// cortadas no radical (o português flexiona no fim: "máquina", "máquinas" → "maquin").
 pub fn terms(text: &str) -> Vec<String> {
     let folded: String = text.chars().map(fold).collect();
     folded
         .split(|c: char| !c.is_alphanumeric())
         .filter(|w| !w.is_empty() && !STOPWORDS.contains(w))
-        .map(str::to_owned)
+        .map(|w| {
+            if w.chars().all(char::is_alphabetic) {
+                w.chars().take(STEM).collect()
+            } else {
+                w.to_owned()
+            }
+        })
         .collect()
 }
 
@@ -63,28 +76,76 @@ fn fold(c: char) -> char {
 }
 
 /// Trechos de até `max_chars` caracteres, cortados em fim de frase (ou de palavra, se uma frase
-/// sozinha passar do limite). Nenhum texto se perde: juntos, os trechos cobrem o documento.
+/// sozinha passar do limite). Um item numerado de norma ou contrato ("12.5.8 Os dispositivos…")
+/// sempre começa um trecho novo: o número fica junto da regra, e um trecho não junta o fim de um
+/// item com o começo do outro. Nenhum texto se perde: juntos, os trechos cobrem o documento.
 pub fn chunks(text: &str, max_chars: usize) -> Vec<String> {
     let max_chars = max_chars.max(40);
     let mut out = Vec::new();
-    let mut current = String::new();
-    for sentence in sentences(text) {
-        for piece in split_long(sentence, max_chars) {
-            if !current.is_empty()
-                && current.chars().count() + 1 + piece.chars().count() > max_chars
-            {
-                out.push(std::mem::take(&mut current));
+    for section in sections(text) {
+        let mut current = String::new();
+        for sentence in sentences(section) {
+            for piece in split_long(sentence, max_chars) {
+                if !current.is_empty()
+                    && current.chars().count() + 1 + piece.chars().count() > max_chars
+                {
+                    out.push(std::mem::take(&mut current));
+                }
+                if !current.is_empty() {
+                    current.push(' ');
+                }
+                current.push_str(piece);
             }
-            if !current.is_empty() {
-                current.push(' ');
-            }
-            current.push_str(piece);
+        }
+        if !current.trim().is_empty() {
+            out.push(current);
         }
     }
-    if !current.trim().is_empty() {
-        out.push(current);
-    }
     out
+}
+
+/// O texto partido antes de cada item numerado: no começo ou depois de espaço, 2 a 5 números
+/// separados por ponto ("12.5", "2.7.1", "4.1.2.1.2"), ponto final opcional, espaço e maiúscula.
+/// "6.000 kg" e "Lei 13.709" não cortam: falta a maiúscula depois, ou o número não é de item.
+fn sections(text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    let mut prev = ' ';
+    for (i, c) in text.char_indices() {
+        if i > start && c.is_ascii_digit() && prev.is_whitespace() && item_number_at(&text[i..]) {
+            out.push(&text[start..i]);
+            start = i;
+        }
+        prev = c;
+    }
+    out.push(&text[start..]);
+    out
+}
+
+fn item_number_at(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let (mut i, mut groups) = (0, 0);
+    loop {
+        let digits = bytes[i..].iter().take_while(|b| b.is_ascii_digit()).count();
+        if digits == 0 || digits > 2 {
+            return false;
+        }
+        i += digits;
+        groups += 1;
+        if bytes.get(i) == Some(&b'.') && bytes.get(i + 1).is_some_and(u8::is_ascii_digit) {
+            i += 1;
+            continue;
+        }
+        break;
+    }
+    if bytes.get(i) == Some(&b'.') {
+        i += 1;
+    }
+    let rest = &text[i..];
+    let after_space = rest.trim_start_matches([' ', '\t']);
+    (2..=5).contains(&groups)
+        && after_space.len() < rest.len()
+        && after_space.chars().next().is_some_and(char::is_uppercase)
 }
 
 /// Frases: terminam em `.`, `!` ou `?` seguido de espaço (ou no fim), ou em quebra de linha. O ponto
@@ -256,6 +317,32 @@ mod tests {
     }
 
     #[test]
+    fn numbered_items_start_a_new_chunk() {
+        let text =
+            "regra anterior que termina aqui. 12.5.8 Os dispositivos devem permitir a operação \
+                    somente com a proteção fechada. 12.5.9 As proteções devem ser fixas. \
+                    2.7 As prensas devem possuir parada.";
+        let out = chunks(text, 320);
+        assert_eq!(out.len(), 4);
+        assert!(out[1].starts_with("12.5.8 Os dispositivos"));
+        assert!(out[2].starts_with("12.5.9 As proteções"));
+        assert!(out[3].starts_with("2.7 As prensas"));
+        assert_eq!(terms(&out.concat()), terms(text));
+    }
+
+    #[test]
+    fn numbers_that_are_not_items_do_not_cut() {
+        for text in [
+            "A carga é de 6.000 Kg no máximo e o resto segue.",
+            "Conforme a Lei 13.709 Art. 5, dado pessoal é protegido.",
+            "Ver o item 12.6 - Dispositivos de parada, que vale aqui.",
+            "Em 2026 Foram trocadas 3 Peças.",
+        ] {
+            assert_eq!(chunks(text, 320).len(), 1, "{text}");
+        }
+    }
+
+    #[test]
     fn documents_lists_each_document_once_with_its_chunk_count() {
         let mut index = Index::new(40);
         index.add(&doc(
@@ -271,14 +358,17 @@ mod tests {
     }
 
     #[test]
-    fn terms_fold_accents_and_drop_stopwords() {
+    fn terms_fold_accents_drop_stopwords_and_stem() {
         assert_eq!(
             terms("Qual é a Constituição de 1988?"),
-            vec!["constituicao", "1988"]
+            vec!["consti", "1988"]
         );
+        assert_eq!(terms("São Paulo, Brasília"), vec!["sao", "paulo", "brasil"]);
+        // Singular e plural, com e sem acento, viram o mesmo radical; "não" fica.
+        assert_eq!(terms("proteção proteções"), terms("protecoes protecao"));
         assert_eq!(
-            terms("São Paulo, Brasília"),
-            vec!["sao", "paulo", "brasilia"]
+            terms("Máquinas não devem parar"),
+            vec!["maquin", "nao", "parar"]
         );
     }
 
