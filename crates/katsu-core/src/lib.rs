@@ -19,6 +19,9 @@ pub use accelerate::AccelerateBackend;
 mod tensor;
 pub use tensor::{Op, Tensor, TensorError};
 
+mod array;
+pub use array::{ArrayData, ArrayError, Compare, DType, Element, Index, NdArray};
+
 mod bf16;
 pub use bf16::{bf16_to_f32, f32_to_bf16, matmul_bf16, round_bf16, Bf16Backend, Bf16Buffer};
 
