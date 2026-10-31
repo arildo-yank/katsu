@@ -28,6 +28,8 @@ O Katsu não tenta ser maior que o PyTorch. Tenta ser **pequeno o bastante para 
 | O 1B cabe numa GPU de 12 GB (RTX 4070) | **estimativa**, no limite; nunca rodou numa 4070 | — |
 | Velocidade contra o PyTorch: no 134M numa 4090, mesmos lotes e mesmos pesos, o PyTorch foi 1,4× mais rápido em FP32 e 3,4× no seu melhor modo (BF16 + FlashAttention) contra o melhor do Katsu na época (TF32); a perda do passo 1 coincide nos dois | medido, 26/10/2026, antes do BF16 do Katsu | `docs/benchmarks/gpu-engine-2026-10-26/pytorch-2026-10-26/` |
 | Distância para o PyTorch com o BF16 atual do Katsu | **não medido** | falta repetir o comparativo |
+| O servidor aceita o formato da API da OpenAI (`/v1/chat/completions`, `/v1/models`): o cliente oficial funciona trocando só a `base_url`, e o que não há (stream, JSON mode, tools) é recusado com erro | medido, 31/10/2026, fora do Docker | `crates/katsu-server/src/openai.rs` |
+| Isso cobre o formato, não a qualidade: o 134M é leitor de documentos (`/rag/*`), não chat geral. Numa primeira conferência, acertou 1 de 5 respostas com gabarito | medido, 31/10/2026, amostra pequena | `ARANDU/docs/INTEGRATION_GUIDE.md` |
 
 ## Quem mais está nesse espaço
 
