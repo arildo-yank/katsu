@@ -193,6 +193,16 @@ fn split_long(sentence: &str, max_chars: usize) -> Vec<&str> {
     parts
 }
 
+/// O documento `doc` é um dos de `docs`, ou uma parte de um deles ("ab12#3" é parte de "ab12").
+fn in_docs(doc: &str, docs: &[String]) -> bool {
+    docs.iter().any(|d| {
+        doc == d
+            || (doc.len() > d.len()
+                && doc.starts_with(d.as_str())
+                && doc.as_bytes()[d.len()] == b'#')
+    })
+}
+
 /// Índice BM25 em memória.
 #[derive(Debug, Default)]
 pub struct Index {
@@ -263,6 +273,13 @@ impl Index {
 
     /// Os `k` trechos de maior escore BM25 (só os com escore > 0), do maior para o menor.
     pub fn search(&self, query: &str, k: usize) -> Vec<Hit<'_>> {
+        self.search_in(query, k, &[])
+    }
+
+    /// Como `search`, mas só nos documentos de `docs` (vazio = todos). Um item de `docs` vale para
+    /// o documento com esse id e para as partes dele ("ab12#3"): um PDF entra na biblioteca em
+    /// partes que dividem o mesmo prefixo. O IDF continua o da biblioteca inteira.
+    pub fn search_in(&self, query: &str, k: usize, docs: &[String]) -> Vec<Hit<'_>> {
         if self.chunks.is_empty() || k == 0 {
             return Vec::new();
         }
@@ -300,6 +317,9 @@ impl Index {
                 total_idf += idf;
             }
             for &(id, tf) in list {
+                if !docs.is_empty() && !in_docs(&self.chunks[id as usize].doc, docs) {
+                    continue;
+                }
                 let tf = tf as f32;
                 let length = self.lengths[id as usize] as f32;
                 let norm = tf * (K1 + 1.0) / (tf + K1 * (1.0 - B + B * length / average));
@@ -401,6 +421,47 @@ mod tests {
             Ok(Synonyms::WithoutConsultor)
         );
         assert!(Synonyms::parse("talvez").is_err());
+    }
+
+    #[test]
+    fn search_in_keeps_only_the_chosen_documents_and_their_parts() {
+        let mut index = Index::new(320);
+        index.add(&doc(
+            "nr12#1",
+            "NR-12",
+            "A máquina deve ter parada de emergência.",
+        ));
+        index.add(&doc(
+            "nr12#2",
+            "NR-12",
+            "A proteção da máquina deve ser fixa.",
+        ));
+        index.add(&doc(
+            "nr34#1",
+            "NR-34",
+            "A embarcação deve ter iluminação de emergência.",
+        ));
+        index.add(&doc(
+            "nr120#1",
+            "NR-120",
+            "Emergência em documento de id parecido.",
+        ));
+        let all: Vec<&str> = index
+            .search("emergência", 5)
+            .iter()
+            .map(|h| h.chunk.doc.as_str())
+            .collect();
+        assert_eq!(all.len(), 3);
+        let only: Vec<String> = index
+            .search_in("emergência", 5, &["nr12".to_string()])
+            .iter()
+            .map(|h| h.chunk.doc.clone())
+            .collect();
+        assert_eq!(only, vec!["nr12#1"]);
+        assert!(index
+            .search_in("embarcação", 5, &["nr12".to_string()])
+            .is_empty());
+        assert_eq!(index.search_in("emergência", 5, &[]).len(), 3);
     }
 
     #[test]

@@ -209,6 +209,9 @@ struct Ask {
     question: String,
     #[serde(default = "default_ask_tokens")]
     max_new_tokens: usize,
+    /// Só estes documentos da biblioteca (ids, ou prefixos das partes de um PDF); vazio = todos.
+    #[serde(default)]
+    docs: Vec<String>,
 }
 fn default_ask_tokens() -> usize {
     80
@@ -220,8 +223,8 @@ async fn rag_ask(
     State(model): State<Arc<Model>>,
     Json(ask): Json<Ask>,
 ) -> Result<Json<Value>, Error> {
-    if ask.question.trim().is_empty() || ask.question.len() > 2000 {
-        return Err(error(StatusCode::BAD_REQUEST, "invalid question"));
+    if ask.question.trim().is_empty() || ask.question.len() > 2000 || !valid_docs(&ask.docs) {
+        return Err(error(StatusCode::BAD_REQUEST, "invalid question or docs"));
     }
     let hits: Vec<Value> = {
         let index = model
@@ -229,7 +232,7 @@ async fn rag_ask(
             .read()
             .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "rag index poisoned"))?;
         index
-            .search(&ask.question, 3)
+            .search_in(&ask.question, 3, &ask.docs)
             .into_iter()
             .map(|h| json!({"doc":h.chunk.doc,"title":h.chunk.title,"text":h.chunk.text,"score":h.score,"coverage":h.coverage}))
             .collect()
@@ -290,6 +293,14 @@ struct Search {
     question: String,
     #[serde(default = "default_search_k")]
     k: usize,
+    /// Só estes documentos da biblioteca (ids, ou prefixos das partes de um PDF); vazio = todos.
+    #[serde(default)]
+    docs: Vec<String>,
+}
+
+/// Até 50 documentos, cada id com até 128 caracteres.
+fn valid_docs(docs: &[String]) -> bool {
+    docs.len() <= 50 && docs.iter().all(|d| !d.trim().is_empty() && d.len() <= 128)
 }
 fn default_search_k() -> usize {
     3
@@ -304,10 +315,11 @@ async fn rag_search(
     if search.question.trim().is_empty()
         || search.question.len() > 2000
         || !(1..=10).contains(&search.k)
+        || !valid_docs(&search.docs)
     {
         return Err(error(
             StatusCode::BAD_REQUEST,
-            "invalid question or k (1..10)",
+            "invalid question, k (1..10) or docs",
         ));
     }
     let index = model
@@ -315,7 +327,7 @@ async fn rag_search(
         .read()
         .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "rag index poisoned"))?;
     let hits: Vec<Value> = index
-        .search(&search.question, search.k)
+        .search_in(&search.question, search.k, &search.docs)
         .into_iter()
         .map(|h| json!({"doc":h.chunk.doc,"title":h.chunk.title,"text":h.chunk.text,"score":h.score,"coverage":h.coverage}))
         .collect();
