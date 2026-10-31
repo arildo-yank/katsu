@@ -18,6 +18,7 @@ use tokio::sync::Semaphore;
 mod calc;
 mod evidence;
 mod grounding;
+mod openai;
 /// Sistema do formato de leitura (o mesmo do SFT de leitura e da régua de leitura).
 const READING_SYSTEM: &str = "Você é o Arandu. Responda em português do Brasil usando só o trecho.";
 const NO_DATA: &str = "Não tenho dados suficientes nos documentos para responder.";
@@ -514,6 +515,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/generate", post(generate))
         .route("/rag/ask", post(rag_ask))
         .route("/rag/search", post(rag_search))
+        .route("/v1/chat/completions", post(openai::chat_completions))
+        .route("/v1/models", get(openai::models))
         .layer(DefaultBodyLimit::max(32768))
         .route(
             "/rag/documents",
