@@ -122,7 +122,7 @@ impl KatsuLmConfig {
                 "vocab_size, block_size and embed_dim must be positive",
             ));
         }
-        if self.heads == 0 || self.embed_dim % self.heads != 0 {
+        if self.heads == 0 || !self.embed_dim.is_multiple_of(self.heads) {
             return Err(TensorError::InvalidShape(
                 "heads must be positive and divide embed_dim",
             ));
@@ -278,7 +278,7 @@ impl KatsuLmConfig {
         backend: Arc<dyn Backend>,
     ) -> Result<Tensor> {
         self.check_params(params)?;
-        if batch == 0 || tokens.is_empty() || tokens.len() % batch != 0 {
+        if batch == 0 || tokens.is_empty() || !tokens.len().is_multiple_of(batch) {
             return Err(TensorError::InvalidShape(
                 "batch must be positive and rectangular",
             ));
@@ -308,7 +308,7 @@ impl KatsuLmConfig {
         backend: Arc<dyn Backend>,
     ) -> Result<Tensor> {
         self.check_params(params)?;
-        if n == 0 || batch == 0 || tokens.is_empty() || tokens.len() % batch != 0 {
+        if n == 0 || batch == 0 || tokens.is_empty() || !tokens.len().is_multiple_of(batch) {
             return Err(TensorError::InvalidShape(
                 "prefix needs n > 0 and a rectangular token batch",
             ));
@@ -425,7 +425,10 @@ impl KatsuLmConfig {
         // sem guardar uma saída [B·T, d] e uma soma residual por cabeça.
         let mut heads = Vec::with_capacity(self.heads);
         let mut out_weights = Vec::with_capacity(self.heads);
-        let per_head = p[HEAD_START..HEAD_START + self.heads * PER_HEAD].chunks_exact(PER_HEAD);
+        let per_head = p[HEAD_START..HEAD_START + self.heads * PER_HEAD]
+            .as_chunks::<PER_HEAD>()
+            .0
+            .iter();
         // Q, K e V de todas as cabeças numa chamada: a entrada h sobe uma vez só.
         let projections: Vec<Tensor> = per_head.clone().flat_map(|w| w[..3].to_vec()).collect();
         let qkv = h.matmul_many_with_backend(&projections, backend.clone())?;
@@ -887,8 +890,10 @@ pub fn load_params(reader: &mut impl std::io::Read) -> std::io::Result<Vec<Tenso
         bytes.resize(numel * 4, 0);
         reader.read_exact(&mut bytes)?;
         let data = bytes
-            .chunks_exact(4)
-            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|&b| f32::from_le_bytes(b))
             .collect();
         params.push(Tensor::new(data, &shape).map_err(|e| invalid(&e.to_string()))?);
     }

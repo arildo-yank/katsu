@@ -60,9 +60,8 @@ impl Kernel {
 fn scalar_dot(x: &[f32], y: &[f32]) -> f32 {
     // Oito acumuladores independentes, como antes no matmul_backward.
     let mut lanes = [0.0f32; 8];
-    let (xc, yc) = (x.chunks_exact(8), y.chunks_exact(8));
-    let (xt, yt) = (xc.remainder(), yc.remainder());
-    for (xs, ys) in xc.zip(yc) {
+    let ((xc, xt), (yc, yt)) = (x.as_chunks::<8>(), y.as_chunks::<8>());
+    for (xs, ys) in xc.iter().zip(yc) {
         for l in 0..8 {
             lanes[l] += xs[l] * ys[l];
         }

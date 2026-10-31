@@ -87,14 +87,7 @@ fn rows(tensor: &Tensor) -> Result<(usize, usize)> {
         .shape()
         .last()
         .ok_or(TensorError::InvalidShape("operation needs rank >= 1"))?;
-    Ok((
-        if width == 0 {
-            0
-        } else {
-            tensor.numel() / width
-        },
-        width,
-    ))
+    Ok((tensor.numel().checked_div(width).unwrap_or(0), width))
 }
 
 impl Tensor {

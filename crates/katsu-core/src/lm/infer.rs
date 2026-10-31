@@ -140,7 +140,9 @@ impl KatsuLmConfig {
             let p = &params[2 + layer * self.per_layer()..2 + (layer + 1) * self.per_layer()];
             let h = layer_norm(&x, d, &p[LN1_G], &p[LN1_B]);
             for (head, w) in p[HEAD_START..HEAD_START + self.heads * PER_HEAD]
-                .chunks_exact(PER_HEAD)
+                .as_chunks::<PER_HEAD>()
+                .0
+                .iter()
                 .enumerate()
             {
                 let slot = layer * self.heads + head;
