@@ -176,6 +176,18 @@ impl Index {
         }
     }
 
+    /// Documentos indexados, na ordem em que entraram: (id, título, número de trechos).
+    pub fn documents(&self) -> Vec<(&str, &str, usize)> {
+        let mut out: Vec<(&str, &str, usize)> = Vec::new();
+        for c in &self.chunks {
+            match out.last_mut() {
+                Some(last) if last.0 == c.doc => last.2 += 1,
+                _ => out.push((&c.doc, &c.title, 1)),
+            }
+        }
+        out
+    }
+
     /// Os `k` trechos de maior escore BM25 (só os com escore > 0), do maior para o menor.
     pub fn search(&self, query: &str, k: usize) -> Vec<Hit<'_>> {
         if self.chunks.is_empty() || k == 0 {
@@ -241,6 +253,21 @@ mod tests {
             title: title.into(),
             text: text.into(),
         }
+    }
+
+    #[test]
+    fn documents_lists_each_document_once_with_its_chunk_count() {
+        let mut index = Index::new(40);
+        index.add(&doc(
+            "a",
+            "Contrato",
+            "Primeira frase do contrato. Segunda frase do contrato.",
+        ));
+        index.add(&doc("b", "Nota", "Uma nota curta."));
+        assert_eq!(
+            index.documents(),
+            vec![("a", "Contrato", 2), ("b", "Nota", 1)]
+        );
     }
 
     #[test]

@@ -322,6 +322,20 @@ async fn rag_search(
     Ok(Json(json!({"hits":hits,"chunks":index.len()})))
 }
 
+/// Lista os documentos da biblioteca: id, título e número de trechos.
+async fn rag_list(State(model): State<Arc<Model>>) -> Result<Json<Value>, Error> {
+    let index = model
+        .rag
+        .read()
+        .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "rag index poisoned"))?;
+    let documents: Vec<Value> = index
+        .documents()
+        .into_iter()
+        .map(|(id, title, chunks)| json!({"id":id,"title":title,"chunks":chunks}))
+        .collect();
+    Ok(Json(json!({"documents":documents,"chunks":index.len()})))
+}
+
 /// Adiciona um documento à biblioteca (e ao arquivo, se KATSU_RAG_DOCS estiver definido).
 async fn rag_add(
     State(model): State<Arc<Model>>,
@@ -366,7 +380,7 @@ fn supported(c: &KatsuLmConfig) -> Result<(), String> {
         || c.block_size == 0
         || c.vocab_size == 0
         || c.layers == 0
-        || c.embed_dim % c.heads != 0
+        || !c.embed_dim.is_multiple_of(c.heads)
     {
         return Err("invalid config: zero field or heads do not divide embed_dim".into());
     }
@@ -488,7 +502,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .layer(DefaultBodyLimit::max(32768))
         .route(
             "/rag/documents",
-            post(rag_add).layer(DefaultBodyLimit::max(1 << 20)),
+            get(rag_list)
+                .post(rag_add)
+                .layer(DefaultBodyLimit::max(1 << 20)),
         )
         .with_state(Arc::new(Model {
             config,
