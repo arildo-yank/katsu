@@ -19,3 +19,6 @@ __pycache__/
 
 # Corpus de pré-treino: dump da Wikipedia (5 GB), JSONL e .bin tokenizados
 /data/pretrain/
+
+# Código de terceiros baixado por scripts/soberania/vendor.sh (78 MB; o hash fica no manifesto)
+/vendor/

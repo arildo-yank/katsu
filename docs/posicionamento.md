@@ -26,7 +26,8 @@ O Katsu não tenta ser maior que o PyTorch. Tenta ser **pequeno o bastante para 
 | O motor CUDA bate com o CPU: 16 testes de paridade passaram numa RTX 4090, perda igual a ~0,03% por passo | medido, 31/10/2026 | `deploy/cuda/runpod_v2_probe.sh` |
 | BF16 + Adam de 8 bits + recomputação levam o 1B de 21,9 GiB para 11,4 GiB de VRAM reservada | medido numa 4090 | `docs/v2-precisao-e-memoria-2026-10-28.md` |
 | O 1B cabe numa GPU de 12 GB (RTX 4070) | **estimativa**, no limite; nunca rodou numa 4070 | — |
-| Velocidade igual ou melhor que o PyTorch | **não medido** | falta o comparativo (abaixo) |
+| Velocidade contra o PyTorch: no 134M numa 4090, mesmos lotes e mesmos pesos, o PyTorch foi 1,4× mais rápido em FP32 e 3,4× no seu melhor modo (BF16 + FlashAttention) contra o melhor do Katsu na época (TF32); a perda do passo 1 coincide nos dois | medido, 26/10/2026, antes do BF16 do Katsu | `docs/benchmarks/gpu-engine-2026-10-26/pytorch-2026-10-26/` |
+| Distância para o PyTorch com o BF16 atual do Katsu | **não medido** | falta repetir o comparativo |
 
 ## Quem mais está nesse espaço
 
@@ -48,10 +49,10 @@ framework.
 
 | Requisito | Situação |
 |---|---|
-| Operar sem internet (air-gapped): sem telemetria, sem atualização automática | sem cliente de rede no código; **falta um teste que rode tudo com a rede cortada** |
-| Dependências travadas e guardadas no repositório (`Cargo.lock`, `cargo vendor`) | `Cargo.lock` sim; **`cargo vendor` não** |
-| Lista pública do que entra (SBOM) | **falta** |
-| Build reproduzível: quem compila o fonte obtém o mesmo binário | **não verificado** |
+| Operar sem internet (air-gapped): sem telemetria, sem atualização automática | **verificado**: compila, testa e treina com a rede cortada pelo sistema (`scripts/soberania/offline.sh`) |
+| Dependências travadas e guardadas localmente (`Cargo.lock`, `cargo vendor`) | **feito**: `scripts/soberania/vendor.sh`, com hash de cada arquivo |
+| Lista pública do que entra (SBOM) | **feito**: `docs/soberania/sbom.json` (CycloneDX), conferido no CI |
+| Build reproduzível: quem compila o fonte obtém o mesmo binário | **verificado na mesma máquina** em caminhos diferentes; entre máquinas, ainda não |
 | Licença clara | MIT |
 | Pesos e dados de treino de origem conhecida | sem pesos de terceiros; corpus documentado em `docs/corpus.md` |
 | Não depender de um fabricante de GPU | **depende**: CUDA é da NVIDIA, código fechado. O CPU é a alternativa que já roda |
@@ -65,10 +66,12 @@ próprio órgão.
 
 Em ordem:
 
-1. **Comparativo com o PyTorch:** o mesmo 1B, os mesmos lotes, a mesma 4090, ~15 minutos cada.
-   Custa menos de US$ 1. Sem esse número, nenhuma afirmação de desempenho.
-2. **Pacote de soberania:** `cargo vendor`, SBOM, teste com a rede cortada, verificação de build
-   reproduzível. Roda no Mac, sem custo.
+1. **Repetir o comparativo com o PyTorch** com o BF16 do Katsu: o script já existe
+   (`scripts/bench_pytorch.py`, mesmos lotes e mesmos pesos). A medida de 26/10 deixou o Katsu
+   3,4× atrás no melhor modo de cada um; falta saber quanto o BF16 fechou. ~15 minutos numa 4090,
+   menos de US$ 1. Até lá, a única afirmação de desempenho honesta é "mais lento que o PyTorch".
+2. **Pacote de soberania:** feito em 31/10/2026 ([`soberania/`](soberania/README.md)). Falta
+   comparar o build entre duas máquinas (macOS e Linux, ou dois Linux).
 3. **Uso por terceiros:** `pip install katsu` a partir do `katsu-python`, exemplos, documentação da
    API.
 4. **Mais modelos:** hoje o Katsu treina uma família (o GPT do Arandu). Um framework precisa servir
@@ -82,4 +85,5 @@ Em ordem:
 > Núcleo com 6 dependências, todas auditáveis. Roda sem internet. Treina e roda um modelo de
 > linguagem de 1B. Código-fonte entregue a quem compra.
 
-Os itens 1 e 2 acima são o que transforma essa frase de promessa em fato verificável.
+Desde 31/10/2026 a frase se confere com os scripts de [`soberania/`](soberania/README.md). O que ainda
+falta para uma frase de desempenho é o item 1.

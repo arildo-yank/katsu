@@ -21,3 +21,4 @@ jobs:
       - run: cargo run -p katsu-core --release --example conv2d
       - run: cargo run -p katsu-core --example train
       - run: cargo check -p katsu-python --locked
+      - run: python3 scripts/soberania/sbom.py --check

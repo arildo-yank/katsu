@@ -19,6 +19,7 @@
 - [Contribuição](../CONTRIBUTING.md): mudanças, issues e pull requests.
 - [Roadmap](roadmap.md): critérios para o próximo MVP.
 - [Posicionamento](posicionamento.md): soberania, concorrentes e o que falta medir.
+- [Pacote de soberania](soberania/README.md): SBOM, vendor, teste sem rede e build reproduzível.
 - [Histórico](../CHANGELOG.md): mudanças ainda não publicadas.
 - [Preparação da publicação](publishing.md): o que conferir antes do push e do anúncio.
 - [Textos de lançamento](launch.md): rascunhos, não posts publicados.
