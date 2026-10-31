@@ -255,6 +255,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "katsu-math"
+version = "0.1.0"
+
+[[package]]
 name = "katsu-python"
 version = "0.1.0"
 dependencies = [
@@ -276,6 +280,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "katsu-core",
+ "katsu-math",
  "katsu-rag",
  "serde",
  "serde_json",

@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/katsu-core", "crates/katsu-python", "crates/katsu-rag", "crates/katsu-server"]
+members = ["crates/katsu-core", "crates/katsu-math", "crates/katsu-python", "crates/katsu-rag", "crates/katsu-server"]
 default-members = ["crates/katsu-core"]
 resolver = "2"
 
@@ -10,6 +10,7 @@ license = "MIT"
 
 [workspace.dependencies]
 katsu-core = { path = "crates/katsu-core", version = "0.1.0" }
+katsu-math = { path = "crates/katsu-math", version = "0.1.0" }
 katsu-rag = { path = "crates/katsu-rag", version = "0.1.0" }
 pyo3 = "0.29.3"
 
