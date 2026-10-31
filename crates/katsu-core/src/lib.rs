@@ -20,9 +20,12 @@ mod tensor;
 pub use tensor::{Op, Tensor, TensorError};
 
 mod array;
+#[allow(unsafe_code)]
+mod gemm;
 pub use array::{
     promote, ArrayData, ArrayError, Bf16, Compare, DType, Element, Hub, Index, NdArray, F16,
 };
+pub use gemm::{sgemm, sgemm_with, Micro};
 
 mod bf16;
 pub use bf16::{bf16_to_f32, f32_to_bf16, matmul_bf16, round_bf16, Bf16Backend, Bf16Buffer};

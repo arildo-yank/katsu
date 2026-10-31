@@ -30,7 +30,7 @@ Cada fase tem um portão medido contra o NumPy na mesma máquina. A fase só fec
 | Fase | O que entra | Para que serve em IA | Portão | Situação |
 |---|---|---|---|---|
 | **0. Array completo** | Tipos f64, f32, i64 e bool; *views* com *strides* sem cópia; fatias com passo, inclusive negativo; transposição; broadcasting; promoção de tipos; reduções; leitura e escrita de `.npy` | Ciência precisa de f64; o pipeline de dados precisa de fatias sem cópia | Gabaritos do NumPy passando | **Quase fechada** (01/11/2026): 106 casos passando; falta a troca no `Tensor` |
-| **1. GEMM no nível BLAS** | Empacotamento e blocagem por cache no estilo BLIS, microkernels NEON e AVX2/AVX-512, f32 e f64 | Atenção, MLP, e a base das fatorações | 1024×1024 no tempo do OpenBLAS (partida: Katsu 16,1 ms contra 8,1 ms) | Falta |
+| **1. GEMM no nível BLAS** | Empacotamento e blocagem por cache no estilo BLIS, microkernels NEON e AVX2/AVX-512, f32 e f64 | Atenção, MLP, e a base das fatorações | 1024×1024 no tempo do OpenBLAS (partida: Katsu 16,1 ms contra 8,1 ms) | **f32 no Mac no portão** (01/11/2026); faltam f64, a medida em x86 e ligar ao treino |
 | **2. Fatorações** | LU com pivô, Cholesky, QR de Householder, autovalores simétricos, SVD, em blocos sobre o GEMM | SVD para LoRA e compressão; QR para inicialização ortogonal; PCA | Resíduo no nível do LAPACK, inclusive em matrizes mal condicionadas; tempo até 2× o do NumPy | Falta |
 | **3. Aleatório e estatística** | Gerador reproduzível igual na CPU e na GPU (Philox), distribuições, funções especiais (gamma, erf) | Inicialização, amostragem, intervalos de confiança | Testes estatísticos; funções especiais contra o SciPy | Falta |
 | **4. FFT** | Radix misto e FFT real, na CPU e depois na GPU | Áudio e fala, convoluções longas, modelos de sequência | Erro e tempo contra o `numpy.fft` | Falta |
@@ -99,3 +99,37 @@ privado.
   passar numa RTX 4090 antes do merge;
 - escrever numa view (hoje as views são só de leitura);
 - percorrer views não contíguas sem montar a lista de posições, que hoje custa memória.
+
+## Fase 1: situação em 01/11/2026
+
+**Feito:** `sgemm` em `crates/katsu-core/src/gemm.rs`, no esquema do BLIS. B é empacotado em fatias de NR
+colunas e A em fatias de MR linhas, com blocos de KC = 256, e as tarefas paralelas são blocos de 64 linhas
+de C. Há três microkernels:
+- NEON 8×12 (aarch64), com 24 acumuladores e FMA por lane;
+- AVX2+FMA 6×16 (x86_64);
+- um escalar 4×8 de reserva.
+
+Os testes comparam cada microkernel disponível com uma referência em f64, em formatos que não são múltiplos
+dos blocos, de 1×1×1 a 130×513×37. A tolerância é 2·k·ε do f32 vezes a soma de |a|·|b|.
+
+**Medida no Mac M3, f32, matrizes quadradas.** São 3 rodadas alternadas com o NumPy 1.26.4 (OpenBLAS, 8
+threads), com mediana de 21 repetições (7 no 2048). O Mac estava ocupado e o tempo variou entre as rodadas;
+a tabela mostra a faixa das medianas.
+
+| n | GEMM antigo do backend | `sgemm` | NumPy (OpenBLAS) | NumPy, melhor tempo |
+|---|---|---|---|---|
+| 512 | 2,5–4,0 ms | 1,22–1,42 ms | 1,47–4,65 ms | 1,18 ms |
+| 1024 | 24,7–30,2 ms | 7,2–8,5 ms | 12,4–17,6 ms | 7,6 ms |
+| 2048 | 212–302 ms | 66–93 ms | 64–78 ms | 60 ms |
+
+`cargo run -p katsu-core --release --example bench_gemm` mede o lado do Katsu.
+
+**O que isso quer dizer:** no 1024, o `sgemm` fica no tempo do OpenBLAS ou abaixo, e passa no portão. No 2048
+ele empata. É de 2× a 4× mais rápido que o GEMM antigo do backend.
+
+**Falta para fechar a fase 1:**
+- f64 (`dgemm`);
+- medir o microkernel AVX2 numa máquina x86. Ele só passou nos testes de exatidão; o CI roda em x86;
+- matrizes retangulares do treino, por exemplo (lote × contexto) × 768 por 768 × 3072;
+- ligar o `sgemm` ao `CpuBackend`. Muda a ordem das somas, então espera a avaliação do 1B, como a troca do
+  `Tensor`.
