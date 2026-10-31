@@ -9,6 +9,7 @@ use std::{collections::HashMap, fmt};
 
 mod integral;
 mod latex;
+pub mod linalg;
 mod prompt;
 pub use integral::antiderivative;
 pub use latex::latex;

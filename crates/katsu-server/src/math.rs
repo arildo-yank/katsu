@@ -1,6 +1,7 @@
 //! Rota `POST /math`: entrada matemática direta para o `katsu-math`, sem o modelo. A resposta diz o método
 //! e se o resultado é aproximado; o que o motor recusa volta como erro 400, nunca como número.
 use axum::{extract::rejection::JsonRejection, http::StatusCode, Json};
+use katsu_math::linalg::{self, Matrix};
 use katsu_math::{
     antiderivative, bisect, diff, eval, integrate, latex, newton, parse, rk4, understand, Expr,
     Intent, Vars,
@@ -48,6 +49,24 @@ pub(super) enum Request {
         from: Option<f64>,
         to: Option<f64>,
         guess: Option<f64>,
+    },
+    Det {
+        a: Matrix,
+    },
+    Inv {
+        a: Matrix,
+    },
+    Matmul {
+        a: Matrix,
+        b: Matrix,
+    },
+    Dot {
+        u: Vec<f64>,
+        v: Vec<f64>,
+    },
+    Cross {
+        u: Vec<f64>,
+        v: Vec<f64>,
     },
     Ode {
         expr: String,
@@ -128,9 +147,88 @@ fn number_latex(value: f64) -> String {
     }
 }
 
+fn tex_vector(v: &[f64]) -> String {
+    let rows: Vec<String> = v.iter().map(|x| number_latex(*x)).collect();
+    format!(
+        "\\begin{{bmatrix}} {} \\end{{bmatrix}}",
+        rows.join(" \\\\ ")
+    )
+}
+
+fn tex_matrix(m: &Matrix) -> String {
+    let rows: Vec<String> = m
+        .iter()
+        .map(|row| {
+            row.iter()
+                .map(|x| number_latex(*x))
+                .collect::<Vec<_>>()
+                .join(" & ")
+        })
+        .collect();
+    format!(
+        "\\begin{{bmatrix}} {} \\end{{bmatrix}}",
+        rows.join(" \\\\ ")
+    )
+}
+
+/// Resultado de álgebra linear: ponto flutuante, por isso marcado como aproximado.
+fn linear(op: &str, input: String, result: Value, tex: String, method: &str) -> Value {
+    json!({"op": op, "input": input.clone(), "input_latex": input, "result": result, "result_latex": tex, "method": method, "approximate": true, "note": "Calculado em ponto flutuante; as últimas casas podem ter erro de arredondamento."})
+}
+
 fn solve(req: Request) -> Result<Value, String> {
     let none = Vars::new();
     match req {
+        Request::Det { a } => {
+            let value = linalg::det(&a)?;
+            Ok(linear(
+                "det",
+                format!("\\det {}", tex_matrix(&a)),
+                json!(value),
+                number_latex(value),
+                "Eliminação de Gauss",
+            ))
+        }
+        Request::Inv { a } => {
+            let out = linalg::inverse(&a)?;
+            Ok(linear(
+                "inv",
+                format!("{}^{{-1}}", tex_matrix(&a)),
+                json!(out),
+                tex_matrix(&out),
+                "Gauss-Jordan",
+            ))
+        }
+        Request::Matmul { a, b } => {
+            let out = linalg::multiply(&a, &b)?;
+            Ok(linear(
+                "matmul",
+                format!("{} {}", tex_matrix(&a), tex_matrix(&b)),
+                json!(out),
+                tex_matrix(&out),
+                "Produto de matrizes",
+            ))
+        }
+        Request::Dot { u, v } => {
+            let value = linalg::dot(&u, &v)?;
+            Ok(linear(
+                "dot",
+                format!("{} \\cdot {}", tex_vector(&u), tex_vector(&v)),
+                json!(value),
+                number_latex(value),
+                "Produto escalar",
+            ))
+        }
+        Request::Cross { u, v } => {
+            let out = linalg::cross(&u, &v)?;
+            Ok(linear(
+                "cross",
+                format!("{} \\times {}", tex_vector(&u), tex_vector(&v)),
+                json!(out),
+                tex_vector(&out),
+                "Produto vetorial",
+            ))
+        }
         Request::Eval { expr, vars } => {
             let e = expression(&expr)?;
             let value = eval(&e, &vars.into_iter().collect())?;
@@ -495,6 +593,31 @@ mod tests {
         assert_eq!(n["method"], "Newton-Raphson");
         let o = run(json!({"op":"ode","expr":"-2 * y","t0":0,"y0":1,"t1":1,"steps":100})).unwrap();
         assert!((o["result"].as_f64().unwrap() - (-2f64).exp()).abs() < 1e-7);
+    }
+
+    #[test]
+    fn solves_linear_algebra_and_writes_latex() {
+        let d = run(json!({"op":"det","a":[[1,2],[3,4]]})).unwrap();
+        assert!((d["result"].as_f64().unwrap() + 2.0).abs() < 1e-9);
+        let i = run(json!({"op":"inv","a":[[2,0],[0,4]]})).unwrap();
+        assert_eq!(i["result"], json!([[0.5, 0.0], [0.0, 0.25]]));
+        assert!(i["result_latex"]
+            .as_str()
+            .unwrap()
+            .starts_with("\\begin{bmatrix}"));
+        assert_eq!(
+            run(json!({"op":"matmul","a":[[1,2]],"b":[[3],[4]]})).unwrap()["result"],
+            json!([[11.0]])
+        );
+        assert_eq!(
+            run(json!({"op":"dot","u":[1,2,3],"v":[4,5,6]})).unwrap()["result"],
+            32.0
+        );
+        assert_eq!(
+            run(json!({"op":"cross","u":[1,0,0],"v":[0,1,0]})).unwrap()["result"],
+            json!([0.0, 0.0, 1.0])
+        );
+        assert!(run(json!({"op":"inv","a":[[1,2],[2,4]]})).is_err());
     }
 
     #[test]

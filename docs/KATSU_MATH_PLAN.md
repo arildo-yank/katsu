@@ -26,13 +26,13 @@ Isso pode ser pior do que uma resposta visivelmente ruim. Por isso a tradução 
 | 1 | Expressões, derivada simbólica, integral numérica, raízes, RK4 | Não | **Feito**, 10 testes |
 | 2 | Rota `POST /math` e tela "Matemática" no Arandu | Não | **Feito** e testado no navegador; falta entrar no app instalado |
 | 3 | Detector de contas diretas no chat, antes do modelo | Não | Falta |
-| 4 | Vetores e matrizes: determinante, produto vetorial, gradiente, divergente, rotacional | Não | Falta |
+| 4 | Vetores e matrizes | Não | **Parte feita:** determinante, inversa, produto de matrizes, escalar e vetorial. Faltam autovalores, gradiente, divergente e rotacional |
 | 5 | Unidades de medida e constantes físicas com fonte | Não | Falta |
 | 6 | Passo a passo das derivadas | Não | Falta |
 | 7 | Álgebra simbólica: simplificação, limites, Taylor | Não | Falta |
-| 8 | Integral simbólica, e só para classes definidas de funções | Não | Falta. O caso geral é um projeto de anos |
+| 8 | Integral simbólica, e só para classes definidas de funções | Não | **Parte feita:** somas, potências, 1/x, sqrt(x), ln(x), a^x, e sin, cos e exp de argumento linear, cada resultado conferido derivando. O caso geral é um projeto de anos |
 | 9 | **Régua de tradução:** frases → expressão, escrita por quem não viu o gerador | Sim | Falta. Portão da etapa 10 |
-| 10 | SFT com `[MATH: …]` | Sim | Só depois da 9. A resposta mostra a expressão usada, para a pessoa conferir |
+| 10 | O modelo chama o motor como ferramenta | Sim | **Feito com o DeepSeek** (`ARANDU/arandu-web/math_tool.py`). Para o modelo do Katsu fazer isso, ainda depende da 9 |
 
 ## Decisões
 
