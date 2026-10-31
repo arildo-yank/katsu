@@ -1,0 +1,85 @@
+# Posicionamento do Katsu
+
+[Índice](README.md)
+
+*31/10/2026. Os números marcados como medidos têm comando ou arquivo de origem. O resto é
+estimativa ou plano, e está dito assim.*
+
+## Por que o Katsu existe
+
+**Soberania.** Um motor de IA feito no Brasil, que um órgão ou empresa brasileira possa auditar
+inteiro, compilar sozinho e rodar sem internet, sem depender de engenharia estrangeira que possa
+chegar a dados sigilosos.
+
+O Katsu não tenta ser maior que o PyTorch. Tenta ser **pequeno o bastante para ser auditado** e
+**completo o bastante para treinar e rodar um modelo de linguagem de verdade**.
+
+## O que já é verificável
+
+| Afirmação | Situação | Como conferir |
+|---|---|---|
+| O núcleo (`katsu-core`) depende de 6 crates externas: `rayon`, `rayon-core`, `crossbeam-deque`, `crossbeam-epoch`, `crossbeam-utils`, `either` | medido | `cargo tree -p katsu-core -e normal` |
+| O servidor com CUDA (`katsu-server --features cuda`) soma 75 crates, a maior parte por `tokio`, `hyper` e `serde` | medido | `cargo tree -p katsu-server --features cuda -e normal` |
+| Nenhuma crate de cliente HTTP ou TLS (`reqwest`, `ureq`, `rustls`, `openssl`); o `hyper` só atende, não chama ninguém | medido | `cargo tree --workspace -e normal` |
+| ~16 mil linhas de Rust no workspace, ~13 mil no núcleo | medido | `find crates -name '*.rs' \| xargs cat \| wc -l` |
+| Treina um GPT de 134M em CPU (Mac M3) e um de 1B em GPU NVIDIA | medido | `docs/katsu-lm.md`, `docs/v2-precisao-e-memoria-2026-10-28.md` |
+| O motor CUDA bate com o CPU: 16 testes de paridade passaram numa RTX 4090, perda igual a ~0,03% por passo | medido, 31/10/2026 | `deploy/cuda/runpod_v2_probe.sh` |
+| BF16 + Adam de 8 bits + recomputação levam o 1B de 21,9 GiB para 11,4 GiB de VRAM reservada | medido numa 4090 | `docs/v2-precisao-e-memoria-2026-10-28.md` |
+| O 1B cabe numa GPU de 12 GB (RTX 4070) | **estimativa**, no limite; nunca rodou numa 4070 | — |
+| Velocidade igual ou melhor que o PyTorch | **não medido** | falta o comparativo (abaixo) |
+
+## Quem mais está nesse espaço
+
+| | Linguagem | Força | Diferença para o Katsu |
+|---|---|---|---|
+| **PyTorch** | Python/C++ | padrão do mercado, várias GPUs, todo modelo | centenas de dependências, milhões de linhas, governança estrangeira |
+| **Burn** (Tracel) | Rust | muitos backends (CUDA, ROCm, Metal, WebGPU), DDP em construção na 0.21 | genérico e grande; empresa estrangeira |
+| **Candle** (Hugging Face) | Rust | roda Llama, Whisper e Stable Diffusion; foco em inferência | treino é secundário; empresa estrangeira |
+| **tinygrad** | Python | pequeno, muitos backends | depende de Python |
+| **Katsu** | Rust | pequeno, auditável, treino e inferência do modelo inteiro, documentação em português | um backend de GPU (CUDA), uma família de modelo, uma GPU por vez |
+
+Em amplitude, o Burn e o Candle estão à frente hoje. O Katsu compete em outra coisa: **ser
+auditável por inteiro e entregue com código-fonte a quem precisa de soberania**.
+
+## O que soberania exige, além de um motor próprio
+
+Um motor próprio não basta. O que entrega dado sigiloso para fora quase sempre é a rede, não o
+framework.
+
+| Requisito | Situação |
+|---|---|
+| Operar sem internet (air-gapped): sem telemetria, sem atualização automática | sem cliente de rede no código; **falta um teste que rode tudo com a rede cortada** |
+| Dependências travadas e guardadas no repositório (`Cargo.lock`, `cargo vendor`) | `Cargo.lock` sim; **`cargo vendor` não** |
+| Lista pública do que entra (SBOM) | **falta** |
+| Build reproduzível: quem compila o fonte obtém o mesmo binário | **não verificado** |
+| Licença clara | MIT |
+| Pesos e dados de treino de origem conhecida | sem pesos de terceiros; corpus documentado em `docs/corpus.md` |
+| Não depender de um fabricante de GPU | **depende**: CUDA é da NVIDIA, código fechado. O CPU é a alternativa que já roda |
+
+**Limites que nenhum framework resolve:** o driver CUDA, o macOS e o Accelerate são fechados e
+estrangeiros; o compilador Rust e as crates vêm de fora, embora abertos e auditáveis. Para
+ambiente sigiloso, o caminho é CPU ou GPU em máquina sem rede, com o binário compilado pelo
+próprio órgão.
+
+## O que falta para chamar de alternativa
+
+Em ordem:
+
+1. **Comparativo com o PyTorch:** o mesmo 1B, os mesmos lotes, a mesma 4090, ~15 minutos cada.
+   Custa menos de US$ 1. Sem esse número, nenhuma afirmação de desempenho.
+2. **Pacote de soberania:** `cargo vendor`, SBOM, teste com a rede cortada, verificação de build
+   reproduzível. Roda no Mac, sem custo.
+3. **Uso por terceiros:** `pip install katsu` a partir do `katsu-python`, exemplos, documentação da
+   API.
+4. **Mais modelos:** hoje o Katsu treina uma família (o GPT do Arandu). Um framework precisa servir
+   a modelos que não foram previstos.
+5. **Várias GPUs:** ver `ARANDU/docs/DDP_ROADMAP_V3.md`, ~3–4 semanas (estimativa).
+6. **Outra GPU além da NVIDIA:** para reduzir a dependência de um fabricante. Projeto grande, sem
+   estimativa.
+
+## A frase para investidor ou órgão público
+
+> Núcleo com 6 dependências, todas auditáveis. Roda sem internet. Treina e roda um modelo de
+> linguagem de 1B. Código-fonte entregue a quem compra.
+
+Os itens 1 e 2 acima são o que transforma essa frase de promessa em fato verificável.

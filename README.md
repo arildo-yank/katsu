@@ -10,7 +10,7 @@ Katsu combina tensores CPU `f32`, diferenciação automática reversa e Conv2D e
 core com Rayon para paralelismo CPU. A explicabilidade é uma direção do projeto:
 ativações e gradientes já estão disponíveis; Grad-CAM ainda está no roadmap.
 
-> **Prévia técnica · 0.1.0 · MIT.** Há SGD, Adam, mini-batches, modelo causal, BPE e SFT nativo em CPU. CUDA é experimental e ainda não foi validado em NVIDIA. A API pode mudar. Não foram medidos ganhos sobre PyTorch.
+> **Prévia técnica · 0.1.0 · MIT.** Há SGD, Adam, mini-batches, modelo causal, BPE e SFT nativo em CPU. CUDA é experimental; passou na paridade com o CPU numa RTX 4090 (31/10/2026). A API pode mudar. Não foram medidos ganhos sobre PyTorch.
 
 [**Dossiê técnico — como o motor foi construído, evidências e limites**](docs/dossie-2026-10-24/README.md)
 
@@ -116,6 +116,6 @@ editáveis e distribuídos sob a mesma licença do projeto.
 ## Escala nativa Rust
 
 Veja [BPE, batches, kernels CPU e CUDA experimental](docs/scaling.md). O backend
-CUDA híbrido está implementado, com validação NVIDIA pendente. Há um
+CUDA híbrido está implementado e passou na paridade com o CPU numa RTX 4090. Há um
 [ambiente de validação GPU](deploy/cuda/README.md) e [exportador GGUF nativo](docs/gguf.md).
 Nenhum peso de terceiros é usado.

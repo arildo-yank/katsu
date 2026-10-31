@@ -13,7 +13,7 @@ documentação ou estrutura de pastas, isoladamente, não tornam uma funcionalid
 - [x] Acesso às ativações e seus gradientes.
 - [x] Testes numéricos e exemplos executáveis.
 - [x] Estrutura de documentação e CI do core.
-- [ ] Confirmar uma execução remota do CI.
+- [x] Confirmar uma execução remota do CI (verde em 31/10/2026).
 
 ## 1. Demonstrar aprendizado
 

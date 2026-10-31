@@ -70,4 +70,4 @@ The detailed documentation is currently in Portuguese:
 are welcome. See [MIT license](LICENSE), [contribution guide](CONTRIBUTING.md),
 [roadmap](docs/roadmap.md) and [changelog](CHANGELOG.md).
 
-See [native scaling](docs/scaling.md) for Rust BPE, batched training and the experimental hybrid CUDA backend. NVIDIA runtime validation is pending. See [GPU validation](deploy/cuda/README.md) and [native GGUF export](docs/gguf.md).
+See [native scaling](docs/scaling.md) for Rust BPE, batched training and the experimental hybrid CUDA backend. It passed CPU parity on an RTX 4090 (2026-10-31). See [GPU validation](deploy/cuda/README.md) and [native GGUF export](docs/gguf.md).

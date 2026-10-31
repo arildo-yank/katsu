@@ -18,6 +18,7 @@
 - [Testes](testing.md): comandos e alcance da validação.
 - [Contribuição](../CONTRIBUTING.md): mudanças, issues e pull requests.
 - [Roadmap](roadmap.md): critérios para o próximo MVP.
+- [Posicionamento](posicionamento.md): soberania, concorrentes e o que falta medir.
 - [Histórico](../CHANGELOG.md): mudanças ainda não publicadas.
 - [Preparação da publicação](publishing.md): o que conferir antes do push e do anúncio.
 - [Textos de lançamento](launch.md): rascunhos, não posts publicados.
