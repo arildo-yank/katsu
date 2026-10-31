@@ -100,5 +100,65 @@ case("fortran_read", "identity", ["fortran_f64.npy"], "-", np.ascontiguousarray(
 scalar = save("scalar_f64", np.float64(3.25) * np.ones(()))
 case("scalar", "identity", [scalar], "-", np.ones(()) * 3.25)
 
+
+# Fase 0, segunda leva: tipos novos, variância, argmax, máscara, take, concatenar e empilhar.
+NAMES = {np.bool_: "bool", np.uint8: "u8", np.int32: "i32", np.int64: "i64", np.float16: "f16",
+         np.float32: "f32", np.float64: "f64"}
+rows = [f"{NAMES[a]} {NAMES[b]} {NAMES[np.result_type(np.zeros(1, a), np.zeros(1, b)).type]}"
+        for a in NAMES for b in NAMES]
+(HERE / "promotion.txt").write_text("\n".join(rows) + "\n")
+
+u8a = save("u8a", np.array([[200, 3, 0], [255, 128, 7]], dtype=np.uint8))
+u8b = save("u8b", np.array([100, 250, 1], dtype=np.uint8))
+i32a = save("i32a", np.array([[2**31 - 1, -5, 7], [-2**31, 9, 0]], dtype=np.int32))
+f16a = save("f16a", rng.standard_normal((2, 3)).astype(np.float16))
+f16b = save("f16b", (rng.standard_normal(3) * 3).astype(np.float16))
+L.update({k: np.load(HERE / v) for k, v in dict(u8a=u8a, u8b=u8b, i32a=i32a, f16a=f16a, f16b=f16b).items()})
+case("add_u8_wrap", "add", [u8a, u8b], "-", L["u8a"] + L["u8b"])
+case("sub_u8_wrap", "sub", [u8a, u8b], "-", L["u8a"] - L["u8b"])
+case("mul_i32_wrap", "mul", [i32a, i32a], "-", L["i32a"] * L["i32a"])
+case("add_u8_i32", "add", [u8a, i32a], "-", L["u8a"] + L["i32a"])
+case("div_u8", "div", [u8a, u8b], "-", L["u8a"] / L["u8b"])
+case("add_f16", "add", [f16a, f16b], "-", L["f16a"] + L["f16b"])
+case("mul_f16", "mul", [f16a, f16b], "-", L["f16a"] * L["f16b"])
+case("div_f16", "div", [f16a, f16b], "-", L["f16a"] / L["f16b"])
+case("add_u8_f16", "add", [u8a, f16b], "-", L["u8a"] + L["f16b"])
+case("add_i32_f16", "add", [i32a, f16b], "-", L["i32a"] + L["f16b"])
+case("add_f16_f32", "add", [f16a, row_f32], "broadcast_row", L["f16a"] + L["row_f32"][:3])
+case("lt_u8_f16", "lt", [u8a, f16b], "-", L["u8a"] < L["f16b"])
+halves = save("halves_f64", np.array([1.0 + 2**-11, 1.0 + 3 * 2**-11, 65504.0, 65520.0, 2**-25, 2**-24 * 1.5,
+                                       -0.0, 1e-8, 70000.0, np.nan, -np.inf, 0.1]))
+case("astype_f64_f16", "astype", [halves], "f16", np.load(HERE / halves).astype(np.float16))
+case("astype_f16_f64", "astype", [f16a], "f64", L["f16a"].astype(np.float64))
+case("astype_i64_u8", "astype", [mat_i64], "u8", L["mat_i64"].astype(np.uint8))
+case("astype_i64_i32", "astype", [big_i64], "i32", L["big_i64"].astype(np.int32))
+for axis in ("none", "0", "1"):
+    ax = None if axis == "none" else int(axis)
+    for ddof in (0, 1):
+        case(f"var_f64_{axis}_{ddof}", f"var{ddof}", [big_f64], axis, np.asarray(L["big_f64"].var(axis=ax, ddof=ddof)), 1e-12)
+        case(f"std_i64_{axis}_{ddof}", f"std{ddof}", [mat_i64], axis, np.asarray(L["mat_i64"].std(axis=ax, ddof=ddof)), 1e-12)
+    case(f"var_f32_{axis}", "var0", [nan_f32], axis, np.asarray(L["nan_f32"].var(axis=ax)), 1e-6)
+    case(f"argmax_f32_{axis}", "argmax", [nan_f32], axis, np.asarray(np.argmax(L["nan_f32"], axis=ax)))
+    case(f"argmin_i64_{axis}", "argmin", [mat_i64], axis, np.asarray(np.argmin(L["mat_i64"], axis=ax)))
+    case(f"max_u8_{axis}", "max", [u8a], axis, np.asarray(L["u8a"].max(axis=ax)))
+    case(f"sum_f16_{axis}", "sum", [f16a], axis, np.asarray(L["f16a"].sum(axis=ax)), 1e-3)
+    case(f"mean_f16_{axis}", "mean", [f16a], axis, np.asarray(L["f16a"].mean(axis=ax)), 1e-3)
+ties = save("ties_i64", np.array([[3, 9, 9, 1], [4, 4, 0, 0]], dtype=np.int64))
+case("argmax_ties", "argmax", [ties], "1", np.argmax(np.load(HERE / ties), axis=1))
+case("select_full", "select", [cube, save("cube_mask", cube_v % 3 == 0)], "-", cube_v[cube_v % 3 == 0])
+case("select_rows", "select", [mat_f64, save("row_mask", np.array([True, False, True, True]))], "-",
+     L["mat_f64"][np.array([True, False, True, True])])
+case("select_none", "select", [mat_i64, save("no_mask", np.zeros((3, 4), dtype=bool))], "-",
+     L["mat_i64"][np.zeros((3, 4), dtype=bool)])
+case("take_axis1", "take", [cube], "1;3,-1,0,0", np.take(cube_v, [3, -1, 0, 0], axis=1))
+case("take_axis2", "take", [mat_i64], "1;-4,2", np.take(L["mat_i64"], [-4, 2], axis=1))
+case("concat_axis0", "concat", [mat_i64, save("more_i64", np.arange(8, dtype=np.int64).reshape(2, 4))], "0",
+     np.concatenate([L["mat_i64"], np.arange(8, dtype=np.int64).reshape(2, 4)], axis=0))
+case("concat_mixed_axis1", "concat", [mat_i64, save("col_f16", np.ones((3, 2), dtype=np.float16))], "1",
+     np.concatenate([L["mat_i64"], np.ones((3, 2), dtype=np.float16)], axis=1))
+case("stack_axis1", "stack", [mat_i64, mat_i64], "1", np.stack([L["mat_i64"], L["mat_i64"]], axis=1))
+case("stack_axis2_u8_f16", "stack", [u8a, save("f16c", np.full((2, 3), 0.5, dtype=np.float16))], "2",
+     np.stack([L["u8a"], np.full((2, 3), 0.5, dtype=np.float16)], axis=2))
+
 (HERE / "cases.txt").write_text(f"# Gerado por gen.py com NumPy {np.__version__}. Não editar à mão.\n" + "\n".join(cases) + "\n")
 print(len(cases), "casos, NumPy", np.__version__)

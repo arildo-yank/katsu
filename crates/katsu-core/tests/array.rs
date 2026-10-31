@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use katsu_core::{Compare, DType, Index, NdArray};
+use katsu_core::{bf16_to_f32, f32_to_bf16, promote, Bf16, Compare, DType, Index, NdArray, F16};
 
 fn fixtures() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/array")
@@ -52,6 +52,9 @@ fn run(op: &str, inputs: &[NdArray], args: &str) -> NdArray {
         "transpose" => a.transpose(),
         "permute" => a.permute(&numbers(args)).unwrap(),
         "broadcast_to" => a.broadcast_to(&numbers(args)).unwrap(),
+        "add" if args == "broadcast_row" => a
+            .add(&b.unwrap().slice(&indices("r::3:")).unwrap())
+            .unwrap(),
         "add" => a.add(b.unwrap()).unwrap(),
         "sub" => a.sub(b.unwrap()).unwrap(),
         "mul" => a.mul(b.unwrap()).unwrap(),
@@ -66,16 +69,40 @@ fn run(op: &str, inputs: &[NdArray], args: &str) -> NdArray {
         "mean" => a.mean(axis(args)).unwrap(),
         "max" => a.max(axis(args)).unwrap(),
         "min" => a.min(axis(args)).unwrap(),
-        "astype" => a
-            .astype(match args {
-                "bool" => DType::Bool,
-                "i64" => DType::I64,
-                "f32" => DType::F32,
-                _ => DType::F64,
-            })
-            .unwrap(),
+        "astype" => a.astype(dtype(args)).unwrap(),
+        "var0" => a.var(axis(args), 0).unwrap(),
+        "var1" => a.var(axis(args), 1).unwrap(),
+        "std0" => a.std(axis(args), 0).unwrap(),
+        "std1" => a.std(axis(args), 1).unwrap(),
+        "argmax" => a.argmax(axis(args)).unwrap(),
+        "argmin" => a.argmin(axis(args)).unwrap(),
+        "select" => a.select(b.unwrap()).unwrap(),
+        "take" => {
+            let (ax, list) = args.split_once(';').unwrap();
+            let list: Vec<i64> = list.split(',').map(|s| s.parse().unwrap()).collect();
+            a.take(&list, ax.parse().unwrap()).unwrap()
+        }
+        "concat" => {
+            NdArray::concatenate(&inputs.iter().collect::<Vec<_>>(), args.parse().unwrap()).unwrap()
+        }
+        "stack" => {
+            NdArray::stack(&inputs.iter().collect::<Vec<_>>(), args.parse().unwrap()).unwrap()
+        }
         "identity" => a.clone(),
         other => panic!("operação desconhecida: {other}"),
+    }
+}
+
+fn dtype(name: &str) -> DType {
+    match name {
+        "bool" => DType::Bool,
+        "u8" => DType::U8,
+        "i32" => DType::I32,
+        "i64" => DType::I64,
+        "f16" => DType::F16,
+        "f32" => DType::F32,
+        "f64" => DType::F64,
+        other => panic!("tipo desconhecido: {other}"),
     }
 }
 
@@ -94,12 +121,10 @@ fn check(name: &str, got: &NdArray, want: &NdArray, tol: f64) {
             want.to_vec::<bool>().unwrap(),
             "{name}"
         ),
-        DType::I64 => assert_eq!(
-            got.to_vec::<i64>().unwrap(),
-            want.to_vec::<i64>().unwrap(),
-            "{name}"
-        ),
-        DType::F32 | DType::F64 => {
+        DType::U8 | DType::I32 | DType::I64 => {
+            assert_eq!(got.values_as::<i64>(), want.values_as::<i64>(), "{name}")
+        }
+        DType::F16 | DType::Bf16 | DType::F32 | DType::F64 => {
             let (g, w): (Vec<f64>, Vec<f64>) = (got.values_as(), want.values_as());
             for (i, (&x, &y)) in g.iter().zip(&w).enumerate() {
                 assert!(
@@ -129,7 +154,7 @@ fn matches_numpy_fixtures() {
         count += 1;
     }
     assert_eq!(
-        count, 50,
+        count, 106,
         "o número de casos mudou: rode gen.py e atualize este teste"
     );
 }
@@ -162,13 +187,13 @@ fn writes_the_same_bytes_as_numpy() {
         "mask_a.npy",
         "row_f32.npy",
         "scalar_f64.npy",
+        "u8a.npy",
+        "i32a.npy",
+        "f16a.npy",
     ] {
         let bytes = std::fs::read(fixtures().join(name)).unwrap();
-        assert_eq!(
-            NdArray::from_npy_bytes(&bytes).unwrap().to_npy_bytes(),
-            bytes,
-            "{name}"
-        );
+        let array = NdArray::from_npy_bytes(&bytes).unwrap();
+        assert_eq!(array.to_npy_bytes().unwrap(), bytes, "{name}");
     }
 }
 
@@ -196,4 +221,77 @@ fn refuses_what_numpy_refuses_or_leaves_undefined() {
         vec![0.0; 3]
     );
     assert!(empty.mean(None).unwrap().to_vec::<f64>().unwrap()[0].is_nan());
+}
+
+#[test]
+fn promotion_matches_numpy_table() {
+    let text = std::fs::read_to_string(fixtures().join("promotion.txt")).unwrap();
+    let mut rows = 0;
+    for line in text.lines() {
+        let names: Vec<&str> = line.split_whitespace().collect();
+        let want = match names[2] {
+            "bool_" => "bool",
+            "uint8" => "u8",
+            "int32" => "i32",
+            "int64" => "i64",
+            "float16" => "f16",
+            "float32" => "f32",
+            "float64" => "f64",
+            other => other,
+        };
+        assert_eq!(
+            promote(dtype(names[0]), dtype(names[1])),
+            dtype(want),
+            "{line}"
+        );
+        rows += 1;
+    }
+    assert_eq!(rows, 49);
+    assert_eq!(promote(DType::F16, DType::Bf16), DType::F32);
+    assert_eq!(promote(DType::U8, DType::Bf16), DType::F32);
+    assert_eq!(promote(DType::Bf16, DType::F32), DType::F32);
+}
+
+#[test]
+fn every_f16_survives_the_round_trip() {
+    for bits in 0..=u16::MAX {
+        let value = F16(bits).to_f64();
+        if value.is_nan() {
+            assert!(F16::from_f64(value).to_f64().is_nan());
+        } else {
+            assert_eq!(F16::from_f64(value), F16(bits), "{bits:#06x}");
+        }
+    }
+}
+
+#[test]
+fn bf16_matches_the_training_engine_conversion() {
+    let mut state = 0x9e37_79b9_7f4a_7c15u64;
+    let specials = [
+        0.0f32,
+        -0.0,
+        1.0,
+        f32::MAX,
+        f32::MIN_POSITIVE,
+        1e-40,
+        -1e-45,
+        f32::INFINITY,
+        3.0e38,
+    ];
+    let random = (0..200_000).map(|_| {
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        f32::from_bits((state >> 32) as u32)
+    });
+    for x in specials.into_iter().chain(random).filter(|x| !x.is_nan()) {
+        let ours = Bf16::from_f64(x as f64);
+        assert_eq!(ours.0, f32_to_bf16(x), "{x:e}");
+        assert_eq!(ours.to_f64(), bf16_to_f32(ours.0) as f64);
+    }
+    let a = NdArray::from_vec(vec![Bf16::from_f64(1.5), Bf16::from_f64(-2.0)], &[2]).unwrap();
+    let sum = a.add(&a).unwrap();
+    assert_eq!(sum.dtype(), DType::Bf16);
+    assert_eq!(sum.values_as::<f64>(), vec![3.0, -4.0]);
+    assert!(sum.to_npy_bytes().is_err(), "bf16 não existe no .npy");
 }

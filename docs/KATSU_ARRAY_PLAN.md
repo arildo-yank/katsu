@@ -29,7 +29,7 @@ Cada fase tem um portão medido contra o NumPy na mesma máquina. A fase só fec
 
 | Fase | O que entra | Para que serve em IA | Portão | Situação |
 |---|---|---|---|---|
-| **0. Array completo** | Tipos f64, f32, i64 e bool; *views* com *strides* sem cópia; fatias com passo, inclusive negativo; transposição; broadcasting; promoção de tipos; reduções; leitura e escrita de `.npy` | Ciência precisa de f64; o pipeline de dados precisa de fatias sem cópia | Gabaritos do NumPy passando | **Primeira parte feita** (01/11/2026): 50 casos passando |
+| **0. Array completo** | Tipos f64, f32, i64 e bool; *views* com *strides* sem cópia; fatias com passo, inclusive negativo; transposição; broadcasting; promoção de tipos; reduções; leitura e escrita de `.npy` | Ciência precisa de f64; o pipeline de dados precisa de fatias sem cópia | Gabaritos do NumPy passando | **Quase fechada** (01/11/2026): 106 casos passando; falta a troca no `Tensor` |
 | **1. GEMM no nível BLAS** | Empacotamento e blocagem por cache no estilo BLIS, microkernels NEON e AVX2/AVX-512, f32 e f64 | Atenção, MLP, e a base das fatorações | 1024×1024 no tempo do OpenBLAS (partida: Katsu 16,1 ms contra 8,1 ms) | Falta |
 | **2. Fatorações** | LU com pivô, Cholesky, QR de Householder, autovalores simétricos, SVD, em blocos sobre o GEMM | SVD para LoRA e compressão; QR para inicialização ortogonal; PCA | Resíduo no nível do LAPACK, inclusive em matrizes mal condicionadas; tempo até 2× o do NumPy | Falta |
 | **3. Aleatório e estatística** | Gerador reproduzível igual na CPU e na GPU (Philox), distribuições, funções especiais (gamma, erf) | Inicialização, amostragem, intervalos de confiança | Testes estatísticos; funções especiais contra o SciPy | Falta |
@@ -74,22 +74,28 @@ privado.
 
 **Feito:** `NdArray` em `crates/katsu-core/src/array.rs`, sem dependência nova. Os testes estão em
 `crates/katsu-core/tests/array.rs`, e os gabaritos foram gerados pelo NumPy 1.26.4 em
-`tests/fixtures/array/gen.py`.
+`tests/fixtures/array/gen.py`. São 106 casos, mais a tabela de promoção.
 
 | Peça | Conferido como |
 |---|---|
-| Tipos bool, i64, f32 e f64, com `astype` | Contra o NumPy; NaN ou infinito para i64 é recusado |
-| Fatias com passo, inclusive negativo, índices negativos e fora do intervalo | 7 fatias de um cubo 3×4×5 |
-| Transposição e permutação de eixos, sem cópia | Contra o NumPy, e conferido que o buffer é o mesmo |
-| Broadcasting, soma, subtração, produto e divisão verdadeira, com a promoção de tipos | 11 casos, igualdade exata |
-| Comparações | `<` e `==`, com promoção |
-| Soma (em pares, como o NumPy), média, máximo e mínimo, por eixo ou no total | 20 casos, com NaN contaminando o máximo |
+| Tipos bool, u8, i32, i64, f16, bf16, f32 e f64, com `astype` | Contra o NumPy. Float fora da faixa do inteiro (NaN inclusive) é recusado |
+| Promoção de tipos | As 49 combinações do NumPy (`promotion.txt`). bf16 com f16 ou u8 dá f32, como no `ml_dtypes` |
+| f16 | Os 65.536 valores voltam iguais; conversão de f64 com um arredondamento só |
+| bf16 | Igual à conversão do motor de treino (`f32_to_bf16`) em 200 mil f32 aleatórios e nos casos de borda |
+| Fatias, transposição, permutação e broadcasting, sem cópia | Contra o NumPy, e conferido que o buffer é o mesmo |
+| Soma, subtração, produto e divisão; comparações | Igualdade exata, inclusive a volta de u8 e i32 e a conta de f16 feita em f32 |
+| Soma, média, variância e desvio padrão (com `ddof`), máximo, mínimo, `argmax` e `argmin` | Por eixo ou no total. NaN contamina o máximo; o `argmax` aponta o primeiro NaN e o primeiro empate |
+| Seleção por máscara, `take`, `concatenate` e `stack` | Contra o NumPy, inclusive com tipos misturados |
 | `.npy` versões 1 a 3, ordem C e Fortran | A escrita gera os mesmos bytes que o NumPy |
 
+**Diferenças conhecidas do NumPy:**
+- a soma de u8 dá i64, e o NumPy dá u64, com os mesmos valores;
+- bf16 não existe no NumPy nem no `.npy`: a referência é o `ml_dtypes` e a conversão do motor.
+
 **Falta para fechar a fase 0:**
+- **o `Tensor` guardar um `NdArray`.** Fica para depois da avaliação do 1B (prevista para 03/11). O `Tensor` é
+  o nó do autograd usado pelo treino e pelo servidor que vão medir o 1B, e trocar o armazenamento dele agora
+  arriscaria essa medida. A troca vai numa branch própria, e os testes de paridade CPU contra GPU precisam
+  passar numa RTX 4090 antes do merge;
 - escrever numa view (hoje as views são só de leitura);
-- índice por máscara e por lista de inteiros;
-- concatenar e empilhar; `argmax`, soma acumulada, produto, variância e desvio padrão;
-- os tipos i32, u8, f16 e bf16;
-- percorrer views não contíguas sem montar a lista de posições, que hoje custa memória;
-- o `Tensor` guardar um `NdArray`.
+- percorrer views não contíguas sem montar a lista de posições, que hoje custa memória.
