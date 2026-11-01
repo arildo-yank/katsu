@@ -83,5 +83,56 @@ class MathTests(unittest.TestCase):
                 call()
 
 
+class PlotTests(unittest.TestCase):
+    def test_pole_is_not_crossed(self):
+        grafico = katu.plot.plot("1/x", x=(-1, 1))
+        serie = grafico.series[0]
+        self.assertEqual(len(serie["segments"]), 2)
+        self.assertEqual([b["kind"] for b in serie["breaks"]], ["pole_suspected"])
+        self.assertEqual(grafico.data["schema"], "katu.plot/1")
+        self.assertIn("polo suspeito", grafico.alt_text)
+        self.assertEqual(grafico.warnings[0]["code"], "finite_sampling")
+
+    def test_figure_chains_and_uses_params(self):
+        fig = katu.plot.figure(x=(0, 1), y=(-1, 2), params={"a": "1/3"}, x_label="tempo")
+        grafico = fig.function("x + a", label="reta").function("x^2").build()
+        self.assertEqual(grafico.axes["y"]["range"], [-1.0, 2.0])
+        self.assertEqual(grafico.axes["x"]["label"], "tempo")
+        self.assertEqual(grafico.series[0]["label"], "reta")
+        self.assertEqual(grafico.series[0]["segments"][0]["points"][0], [0.0, 1 / 3])
+        self.assertIn("Plot(reta, x^2", repr(grafico))
+
+    def test_refusals_carry_the_contract(self):
+        for args, kwargs, status, code in (
+            (("ln(x)",), {"x": (-1, 0)}, "invalid_input", "domain_error"),
+            (("foo(x)",), {"x": (0, 1)}, "invalid_input", "parse_error"),
+            (("x + a",), {"x": (0, 1)}, "data_unavailable", "missing_variable"),
+            (("x",), {}, "clarification_needed", "missing_range"),
+            (("x",), {"x": (1, 0)}, "invalid_input", "invalid_range"),
+            (("x",) * 17, {"x": (0, 1)}, "resource_limit", "limit_size"),
+        ):
+            with self.assertRaises(katu.plot.PlotRefused) as caught:
+                katu.plot.plot(*args, **kwargs)
+            self.assertEqual((caught.exception.status, caught.exception.code), (status, code))
+        with self.assertRaises(ValueError):
+            katu.plot.Figure(x=(0, 1), theme="azul").function("x").build()
+
+    def test_same_request_same_bytes(self):
+        once = katu.plot.plot("tan(x)", x=(-5, 5)).to_json()
+        self.assertEqual(once, katu.plot.plot("tan(x)", x=(-5, 5)).to_json())
+
+    def test_exports(self):
+        grafico = katu.plot.plot("1/x", "x^3", x=(-1, 1), theme="dark")
+        self.assertEqual(grafico._repr_svg_(), grafico.svg)
+        self.assertEqual(grafico.svg.count("<path "), 3)
+        self.assertIn("#1a1a19", grafico.svg)
+        with tempfile.TemporaryDirectory() as folder:
+            for name, start in (("a.svg", "<svg "), ("a.csv", "series,segment,x,y"), ("a.json", "{")):
+                path = grafico.save(Path(folder) / name)
+                self.assertTrue(path.read_text(encoding="utf-8").startswith(start))
+            with self.assertRaises(ValueError):
+                grafico.save(Path(folder) / "a.bmp")
+
+
 if __name__ == "__main__":
     unittest.main()

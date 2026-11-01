@@ -1,4 +1,4 @@
-//! Ponte Python do Katu: `katu.Array` (o `NdArray` do `katu-core`) e as funções do `katu-math`.
+//! Ponte Python do Katu: `katu.Array` (o `NdArray` do `katu-core`), as funções do `katu-math` e o `katu-plot`.
 //! Só a casca: a conta acontece no Rust. Fase 7 de `docs/KATU_ARRAY_PLAN.md`; uso em
 //! `docs/MANUAL_KATU_PYTHON.md`.
 
@@ -603,6 +603,38 @@ fn latex(expr: &str) -> PyResult<String> {
     Ok(katu_math::latex(&parse(expr)?))
 }
 
+/// Prazo de um gráfico, o mesmo da rota `/v1/plot`.
+const PLOT_TIME_LIMIT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// O pedido em JSON vira `{artifact, svg, csv}` ou `{refusal}`. Pedido malformado é ValueError.
+#[pyfunction]
+fn _plot(request: &str) -> PyResult<String> {
+    let parsed: katu_plot::PlotRequest =
+        serde_json::from_str(request).map_err(|why| PyValueError::new_err(why.to_string()))?;
+    let built = katu_math::budget::with_budget(PLOT_TIME_LIMIT, None, || {
+        katu_plot::build(&parsed, &katu_plot::Limits::default())
+    });
+    let answer = match built {
+        Ok(artifact) => {
+            let theme = if parsed.theme == "dark" {
+                &katu_plot::TOKENS_DARK
+            } else {
+                &katu_plot::TOKENS_LIGHT
+            };
+            let viewport = parsed.viewport;
+            serde_json::json!({
+                "svg": katu_plot::render_svg(&artifact, theme, viewport.width_px, viewport.height_px),
+                "csv": artifact.to_csv(),
+                "artifact": artifact,
+            })
+        }
+        Err(why) => serde_json::json!({
+            "refusal": {"status": why.status, "code": why.code, "message": why.message},
+        }),
+    };
+    Ok(answer.to_string())
+}
+
 #[pymodule]
 fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
@@ -622,6 +654,7 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
         wrap_pyfunction!(root, module)?,
         wrap_pyfunction!(ode, module)?,
         wrap_pyfunction!(latex, module)?,
+        wrap_pyfunction!(_plot, module)?,
     ] {
         module.add_function(function)?;
     }

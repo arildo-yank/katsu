@@ -273,7 +273,9 @@ version = "0.1.0"
 dependencies = [
  "katu-core",
  "katu-math",
+ "katu-plot",
  "pyo3",
+ "serde_json",
 ]
 
 [[package]]

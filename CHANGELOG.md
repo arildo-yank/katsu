@@ -6,7 +6,7 @@ A versão nos manifests é 0.1.0. Ainda não foi estabelecida uma release public
 
 ### Adicionado
 
-- katu-plot: gráficos 2D de funções, com amostragem adaptativa, classificação de quebras no katu-math, SVG e CSV, na rota `POST /v1/plot`.
+- katu-plot: gráficos 2D de funções, com amostragem adaptativa, classificação de quebras no katu-math, SVG e CSV, na rota `POST /v1/plot` e em Python, como `katu.plot`.
 - Workspace Cargo com core Rust e scaffold PyO3/Maturin.
 - Tensores CPU f32, validação de shapes, soma, mul, matmul e sum.
 - Grafo dinâmico com autograd reverso, VJP e acumulação de gradientes.

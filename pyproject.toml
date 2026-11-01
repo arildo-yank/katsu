@@ -6,11 +6,11 @@ build-backend = "maturin"
 name = "katu"
 dynamic = ["version"]
 requires-python = ">=3.10"
-description = "Katu: typed N-d arrays, a blocked GEMM and symbolic calculus, computed in Rust"
+description = "Katu: typed N-d arrays, a blocked GEMM, symbolic calculus and function plots, computed in Rust"
 readme = "README.md"
 license = "MIT"
 authors = [{ name = "Arildo Yank" }]
-keywords = ["arrays", "gemm", "calculus", "deep-learning", "rust"]
+keywords = ["arrays", "gemm", "calculus", "plotting", "deep-learning", "rust"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Rust",

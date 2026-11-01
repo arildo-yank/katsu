@@ -246,5 +246,7 @@ fora da faixa, e `"full"` se não; sai o aviso `empty_series` quando só uma das
   `finite_sampling`.
 - A legenda do SVG estima a largura do texto, porque SVG não mede texto.
 
+**Python:** `katu.plot`, pelo pacote `katu`, chama o mesmo `build` da rota, no processo, com o mesmo prazo de 2 s.
+
 **Fora, por decisão:** PNG no motor (F2, F8), escalas log (F9), integração com o Arandu e uso como ferramenta do modelo
-(F7, seção 7), Python.
+(F7, seção 7).

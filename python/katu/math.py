@@ -1,4 +1,4 @@
-"""Cálculo do katsu-math: derivada simbólica, primitivas conferidas, integral, raízes e EDO.
+"""Cálculo do katu-math: derivada simbólica, primitivas conferidas, integral, raízes e EDO.
 
 Responde exato ou recusa com ValueError; não executa código. Ângulos em radianos.
 """

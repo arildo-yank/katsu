@@ -4,6 +4,7 @@
 
 - **`katu.Array`:** array N-dimensional com tipo, no modelo do NumPy. Fatias e transposição não copiam dados.
 - **`katu.math`:** derivada simbólica, primitivas conferidas, integral, raízes e EDO. Responde exato ou recusa.
+- **`katu.plot`:** gráficos 2D de funções, com polos, saltos e lacunas marcados pelo motor. Exporta SVG, CSV e JSON.
 
 *Situação em 01/11/2026: funciona compilando a partir do código. Ainda não está no PyPI. O nome `katu` está
 livre lá, mas ainda não foi registrado. Os exemplos abaixo foram rodados no Python 3.13, num Mac M3, e estão
@@ -30,6 +31,30 @@ pip install target/wheels/katu-*.whl
 ```
 
 O wheel é `abi3`: o mesmo arquivo serve para qualquer Python a partir do 3.10, na mesma plataforma.
+
+## Gráficos
+
+```python
+import katu
+
+katu.plot.plot("1/x", "x^3", x=(-1, 1)).save("curvas.svg")
+
+fig = katu.plot.figure(x=(0, 6.28), theme="dark", width=1000, height=600)
+fig.function("sin(x)", label="seno").function("a*cos(x)", label="cosseno")
+```
+
+Variável além de `x` vai em `params`, como em `katu.plot.figure(x=(0, 1), params={"a": "1/3"})`.
+
+| O que `build()` devolve | Conteúdo |
+|---|---|
+| `.series`, `.axes`, `.warnings`, `.alt_text` | Partes do artefato `katu.plot/1` |
+| `.data`, `.to_json()` | O artefato inteiro |
+| `.svg`, `.csv` | Exportações geradas pelo motor |
+| `.save(caminho)` | Grava `.svg`, `.csv` ou `.json`, conforme a extensão |
+
+No Jupyter, o gráfico aparece sozinho, em SVG. Recusa levanta `katu.plot.PlotRefused`, um `ValueError` com `status` e `code`
+do contrato, sem gráfico parcial. Só 2D, em escala linear; não há PNG nem 3D. Contrato em
+[KATU_PLOT_CONTRATO.md](KATU_PLOT_CONTRATO.md).
 
 ## Primeiros passos
 
