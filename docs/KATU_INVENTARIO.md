@@ -55,6 +55,10 @@ recusa assíntotas também em `katu.root`.
   `KATU_MODEL_DIR`, lidos do `.env`. Por isso **uma compilação em `KATSU/target/release` muda o que o app executa na próxima
   abertura**. A worktree isolada compila em `KATSU-motor-fase1/target`, para isso não acontecer por acidente.
 
+**Dois apps, uma porta.** `Arandu.app` (API 8766) e `Arandu V2.app` (API 8767) sobem o Katu na mesma 8792. `spawn_katu` só roda
+ao abrir e não faz nada se a porta já responde. Quem abriu primeiro fica dono do servidor e o derruba ao fechar; o outro não o
+sobe de novo e as contas passam a falhar. O app também não guarda log disso, porque o `eprintln!` não vai para lugar nenhum.
+
 ## Processos em 01/11/2026, 20:05
 
 | Processo | Depende do checkout KATSU? | Regra |
@@ -63,7 +67,7 @@ recusa assíntotas também em `katu.root`.
 | Treino 1B no pod `jfo7c9h0li3ua5` | Não usa o checkout do Mac durante a execução | Não tocar; estado conferido só pelo log do guarda |
 | `Arandu V2.app`, PID 36101 | Só o binário, ao abrir | Sem reiniciar sem autorização |
 | API em Python na `127.0.0.1:8767` | Fala por HTTP; depende da 8792 para contas | Sem reiniciar |
-| Portas 8792 e 8793 | Nada escutando | Testes usam porta própria (18792), e o servidor temporário é desligado no fim |
+| Portas 8792 e 8793 | Nada escutando; V2 aberto sem filho `katu-server`, nem encerrado | Testes usam porta própria (18792), e o servidor temporário é desligado no fim |
 
 Fica fora deste levantamento o que roda só no pod, além do que o guarda registra.
 

@@ -8,7 +8,7 @@ recorte das fases 3 a 6, com aritmética exata, álgebra básica, cálculo já s
 
 | Tarefa | Estado |
 |---|---|
-| A1 | Parte feita: integrado em `feat/katsu-lm-v1` (`02fdf77`), sem push, e compilado em `target/release/katu-server`. O binário anterior está em `katu-server.antes-2026-11-01`. **Falta abrir de novo o app e conferir a 8792**, que não estava escutando com o app aberto |
+| A1 | Parte feita: integrado em `feat/katsu-lm-v1` (`02fdf77`), sem push, e compilado em `target/release/katu-server`. O binário anterior está em `katu-server.antes-2026-11-01`. **Falta abrir de novo o app e conferir a 8792.** Ela estava fechada porque os dois apps a dividem: ver a tarefa A7 |
 | A2, A3 | Feitas: [KATU_INVENTARIO.md](KATU_INVENTARIO.md) |
 | B1, B4 | Feitas |
 | C1 | **Pendente de revisão humana.** C2 e C3 aplicam o contrato como versão provisória |
@@ -40,6 +40,7 @@ fim de cada ciclo, comparando com o previsto. Nenhuma tarefa daqui pede GPU, tre
 | A3 | Inventário, por leitura, dos processos que dependem do checkout | | P | Lista conferida com `lsof` e `ps` | Mudar enquanto o piloto roda |
 | A4 | Matriz de testes com versões e hardware; primeira execução do CI no Linux x86 | A1 | P | Execução verde registrada | Push exige autorização, repositório público |
 | A5 | Casos Arandu↔Katu reais com servidor temporário, em script | | M | Script no ARANDU, sem rede externa | Servidor pede checkpoint para subir mesmo só para contas |
+| A7 | App sobe o Katu de novo quando a 8792 cai, e registra em arquivo o motivo de não subir | | P | Teste do laço; fechar o outro app não derruba as contas por mais que alguns segundos | Dois apps disputarem a porta; reinstalar pede permissão de volume |
 | A6 | Separar o serviço matemático do carregamento do modelo | A2 | M | Rota `/math` sobe sem checkpoint e sem 540 MB | Muda inicialização; preservar a atual |
 
 ## Ciclo B: lacunas achadas na Fase 1
@@ -133,7 +134,7 @@ C3 → G1 → G2, G3; G4 → G5
 
 ## Resumo do esforço, sem paralelismo
 
-Somando as faixas: 14 tarefas P, 26 M e 6 G, ou cerca de 90 a 180 dias de trabalho de uma pessoa. As tarefas G concentram a
+Somando as faixas: 15 tarefas P, 26 M e 6 G, ou cerca de 90 a 180 dias de trabalho de uma pessoa. As tarefas G concentram a
 incerteza: C4, C6, C9, E2, E3 e G4. Essa soma é uma ordem de grandeza para decidir o próximo ciclo, não um prazo prometido, e
 será refeita ao fim do ciclo C.
 
