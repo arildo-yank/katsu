@@ -8,11 +8,11 @@ recorte das fases 3 a 6, com aritmética exata, álgebra básica, cálculo já s
 
 | Tarefa | Estado |
 |---|---|
-| A1 | Parte feita: Fase 1 integrada em `feat/katsu-lm-v1` (`71e2863`), sem push. **Falta compilar e levar ao app**, sem autorização ainda |
+| A1 | Parte feita: integrado em `feat/katsu-lm-v1` (`02fdf77`), sem push, e compilado em `target/release/katu-server`. O binário anterior está em `katu-server.antes-2026-11-01`. **Falta abrir de novo o app e conferir a 8792**, que não estava escutando com o app aberto |
 | A2, A3 | Feitas: [KATU_INVENTARIO.md](KATU_INVENTARIO.md) |
 | B1, B4 | Feitas |
 | C1 | **Pendente de revisão humana.** C2 e C3 aplicam o contrato como versão provisória |
-| C2, C3 | Feitas, sem consumidor ainda; o Arandu segue em `/math` |
+| C2, C3 | Feitas e integradas, sem consumidor ainda; o Arandu segue em `/math` |
 
 Medido neste ciclo: cerca de 10 minutos de relógio, com um agente assistido, e cerca de 1.140 linhas alteradas entre código,
 testes e script. Estimado para o ciclo, nas faixas abaixo: B1 e B4 P, C2 e C3 M, cerca de 5 a 10 dias de uma pessoa. A diferença não

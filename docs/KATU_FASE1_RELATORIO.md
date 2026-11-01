@@ -1,8 +1,8 @@
 # Fase 1: relatório das correções
 
 Data: 01/11/2026. Branch `fix/motor-computacional-fase1`, a partir de KATSU `2709b2b`, na worktree
-`/Volumes/500G DEV/KATSU-motor-fase1`. Commits de `c17cef1` a `b76780c`. Sem push e sem merge: o checkout em
-`feat/katsu-lm-v1` e os serviços instalados **ainda não têm** estas correções.
+`/Volumes/500G DEV/KATSU-motor-fase1`. Commits de `c17cef1` a `b76780c`. Depois integrados em `feat/katsu-lm-v1`, sem push, e compilados em `target/release/katu-server` em 01/11/2026 às 20:10; o app
+só passa a usá-los ao abrir de novo.
 
 ## Os seis defeitos
 
@@ -119,7 +119,7 @@ Fora dos seis defeitos; viraram tarefas em [KATU_MARCO1_TAREFAS.md](KATU_MARCO1_
 
 | ID | Observado | Tarefa |
 |---|---|---|
-| L1 | **Newton devolvia assíntota como raiz:** `1/x` a partir de 1 dava `1099511627776`, `exp(-x)` dava `28`. Corrigido em `feat/motor-contrato-v1`, ainda sem integrar | B1, feita |
+| L1 | **Newton devolvia assíntota como raiz:** `1/x` a partir de 1 dava `1099511627776`, `exp(-x)` dava `28`. Corrigido em `feat/motor-contrato-v1`, já integrada | B1, feita |
 | L2 | `0^0` retorna `1` sem declarar a convenção | B2 |
 | L3 | O LaTeX arredonda a entrada mostrada: `1.000000000000001` aparece como `1` | B3 |
 | L4 | `inv` dizia "singular" também para matriz apenas quase singular. Corrigido na mesma branch | B4, feita |
