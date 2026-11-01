@@ -33,6 +33,8 @@ registro da marca no INPI ainda não foi feito.
 - recusa dados pessoais;
 - tudo isso sem sair da máquina.
 
+**Copiloto, não piloto automático.** O Arandu acelera a leitura, a busca de provas e as contas; a redação e a decisão continuam com o profissional. Em laudos, isso quer dizer preencher campos conferíveis num modelo que o profissional controla, e não escrever a conclusão.
+
 **O que ele ainda não faz:** juntar vários documentos numa resposta escrita, ou entender um problema descrito com palavras. Isso exige um modelo que entenda o pedido. Hoje esse modelo é o DeepSeek, na nuvem, com o filtro de dados pessoais na frente. O modelo próprio de 1B ainda está em treino e não foi medido.
 
 ## Por que o Katu existe
