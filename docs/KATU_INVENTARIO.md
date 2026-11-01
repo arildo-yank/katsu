@@ -60,6 +60,18 @@ enquanto o app está aberto e deixa em paz um servidor que já responde. Quem ab
 fechar; o outro assume em cerca de 5 segundos, medidos nos apps instalados em 01/11/2026 (ARANDU `b934966`). Log em
 `ARANDU/data/logs/arandu-app-<porta da API>.log`.
 
+**Tempos de subida medidos em 01/11/2026**, Apple M3, com o modelo e a biblioteca do app:
+
+| Medida | Resultado |
+|---|---|
+| `katu-server`, do início até responder, fora do app | 1,89 s, 0,52 s, 0,52 s |
+| `import api` da API em Python | 0,35 s, 0,25 s |
+| Dois `katu-server` ao mesmo tempo na mesma porta | Porta aberta em 1,52 s; o perdedor sai com `AddrInUse`, o vencedor segue |
+
+A primeira abertura do `Arandu.app` novo levou cerca de 28 s até a API responder, e nessa abertura o Katu não subiu, pois o
+V2 era o dono. Nem o Katu nem o carregamento da API explicam esse tempo. A causa mais provável é o macOS, com a nova assinatura
+ad hoc e a permissão de volume já vistas antes. Não foi reproduzido: uma reinstalação cronometrada confirmaria.
+
 ## Processos em 01/11/2026, 20:05
 
 | Processo | Depende do checkout KATSU? | Regra |

@@ -16,6 +16,13 @@ valores são ilustrativos, exceto na tabela de gabaritos.
 5. O modelo de linguagem recebe o resultado inteiro e não pode acrescentar número, fonte ou passo ausente dele.
 6. Campo que não se aplica é omitido, nunca preenchido com zero, texto vazio ou palpite.
 
+## Decisões registradas
+
+- **01/11/2026, pelo usuário:** `det` igual a zero em ponto flutuante é `inconclusive`, porque pede análise de condicionamento
+  e não prova singularidade. Já era o comportamento de `/v1/compute`; `/math` segue devolvendo `0`, por compatibilidade.
+- **01/11/2026, pelo usuário:** aprovada a implementação dos tipos exatos (C4 e C5).
+- **Pendente:** o restante do contrato, em especial polo como `inconclusive` e os limites da seção 6.
+
 ## 2. Envelope
 
 ```json
@@ -140,8 +147,11 @@ são a forma de não ligar um polo com uma reta falsa. O núcleo gera a geometri
 - `numeric`: f64, como hoje.
 - `auto`: tenta exato; se precisar aproximar, responde `nature: "numeric"` e um aviso dizendo qual operação forçou isso.
 
-**Tipos**, sem dependência nova, implementados no katu-math: `Int` (inteiro de tamanho arbitrário) e `Rational`
-(sempre em forma reduzida, com denominador positivo). Decimais de dinheiro, complexos e precisão arbitrária ficam em
+**Tipos**, sem dependência nova, em `katu_math::exact`: `Int` (inteiro de tamanho arbitrário) e `Rational` (sempre em forma
+reduzida, com denominador positivo). Existem e estão testados, mas ainda sem rota: ligar a `/v1/compute` é a tarefa C7. `rug`
+foi descartado por trazer GMP, código de terceiro e licença LGPL, contra a direção de implementação própria do plano;
+`BigDecimal` não serve como base porque não representa 1/3. Tipo exato só resolve o que fecha em racionais: raiz, pi e
+seno continuam em f64. Decimais de dinheiro, complexos e precisão arbitrária ficam em
 etapas próprias da Fase 2.
 
 **Semântica:**
@@ -163,8 +173,10 @@ exato acontece sozinha.
 
 **Saída.** Inteiros grandes e racionais saem em JSON como texto, pois número JSON perderia dígitos.
 
-**Limites**, ajustáveis após medição: entrada de até 500 bytes (atual), profundidade 48 (atual), 262.144 bits por
-inteiro e estimativa de bits antes de calcular potência, para `2^(10^9)` sair como `limit_size` sem alocar nada.
+**Limites**: entrada de até 500 bytes, profundidade 48, 262.144 bits por inteiro e estimativa de bits antes de calcular
+potência, para `2^(10^9)` sair como `limit_size` sem alocar nada (1,3 µs medidos). No limite, reduzir um racional levou 1,4 s
+no Apple M3, em modo release. Uma expressão de 500 bytes pode repetir isso: **antes de expor o modo exato, é preciso o
+orçamento de tempo de C8 ou um limite menor**. A 65.536 bits, a escala quadrática daria cerca de 90 ms, a medir.
 
 ## 7. Primeiro recorte: unidades
 
@@ -210,6 +222,7 @@ Escritos à mão, a partir das definições. Entram como testes antes da impleme
 | `(1/3) * 3` | exact | `1` |
 | `1/0` | exact | `invalid_input` / `division_by_zero` |
 | `0^0` | exact | `invalid_input` / `domain_error` |
+| `0^-1` | exact | `invalid_input` / `division_by_zero` |
 | `sqrt(2)` | exact | `unsupported` / `exact_mode_unavailable` |
 | `sqrt(2)` | auto | `numeric`, com aviso |
 | `2^(10^9)` | exact | `resource_limit` / `limit_size`, sem alocar |

@@ -9,11 +9,13 @@
 use std::{collections::HashMap, fmt};
 
 mod error;
+pub mod exact;
 mod integral;
 mod latex;
 pub mod linalg;
 mod prompt;
 pub use error::{ErrorCode, MathError};
+pub use exact::{exact_eval, Int, Rational};
 pub use integral::antiderivative;
 pub use latex::latex;
 pub use prompt::{understand, Intent};
