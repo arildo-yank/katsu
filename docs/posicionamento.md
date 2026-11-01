@@ -5,6 +5,13 @@
 *31/10/2026. Os números marcados como medidos têm comando ou arquivo de origem. O resto é
 estimativa ou plano, e está dito assim.*
 
+## O nome
+
+**Katu** vem do tupi e quer dizer "bom". O motor se chamava Katsu até 01/11/2026. A troca veio
+porque `katsu` já era um pacote de outra pessoa no PyPI, e porque o projeto passou a usar nomes de
+línguas indígenas brasileiras, como o modelo Arandu ("sabedoria", em tupi-guarani). O pedido de
+registro da marca no INPI ainda não foi feito.
+
 ## Por que o Katu existe
 
 **Soberania.** Um motor de IA feito no Brasil, que um órgão ou empresa brasileira possa auditar
