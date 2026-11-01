@@ -5,12 +5,17 @@ Uso: python3 scripts/math_reference/check.py http://127.0.0.1:PORTA [--seed N]
 Sai com código 1 se algum caso divergir. Passar aqui não certifica o motor: é uma amostra.
 """
 import argparse
+import http.client
 import json
 import math
 import random
 import sys
+import threading
+import time
 import urllib.error
+import urllib.parse
 import urllib.request
+from fractions import Fraction
 
 import numpy as np
 from scipy import integrate, optimize
@@ -131,19 +136,97 @@ def newton(base, t, rng, count):
 
 def contract(base, t):
     """A rota nova tem de dar o mesmo número da antiga, e recusa em /v1 é HTTP 200 com código."""
-    def compute(**body):
-        request = urllib.request.Request(base.rstrip("/") + "/v1/compute", json.dumps(body).encode(), {"Content-Type": "application/json"})
-        with urllib.request.urlopen(request, timeout=30) as response:
-            return json.load(response)
-
     for body in (dict(op="eval", expr="sin(1)"), dict(op="det", a=[[1, 2], [3, 4]]), dict(op="root", expr="x^2 - 2", guess=1)):
         old = call(base, **body)[1]["result"]
-        new = compute(**body)
+        new = compute(base, **body)
         t.check("/v1/compute = /math", new["status"] == "success" and new["content"]["value"]["value"] == old, f"{body}: {new}")
-    new = compute(op="eval", expr="1/0")
+    new = compute(base, op="eval", expr="1/0")
     t.check("/v1/compute recusa com código", new["status"] == "invalid_input" and new["refusal"]["code"] == "division_by_zero", new)
-    new = compute(op="eval", expr="0.1 + 0.2", mode="exact")
+    new = compute(base, op="eval", expr="sqrt(2)", mode="exact")
     t.check("/v1/compute recusa com código", new["status"] == "unsupported", new)
+
+
+def compute(base, **body):
+    request = urllib.request.Request(base.rstrip("/") + "/v1/compute", json.dumps(body).encode(), {"Content-Type": "application/json"})
+    with urllib.request.urlopen(request, timeout=60) as response:
+        return json.load(response)
+
+
+def exact_expression(rng, depth):
+    """Texto e valor construídos juntos, sem passar por nenhum analisador."""
+    if depth == 0 or rng.random() < 0.25:
+        whole, places = rng.randint(0, 999), rng.randint(1, 9)
+        digits = rng.randint(0, 10**places - 1)
+        return f"{whole}.{digits:0{places}d}", Fraction(whole) + Fraction(digits, 10**places)
+    op = rng.choice("+-*/^")
+    left, a = exact_expression(rng, depth - 1)
+    if op == "^":
+        power = rng.randint(1, 5)
+        return f"({left})^{power}", a**power
+    right, b = exact_expression(rng, depth - 1)
+    if op == "/" and b == 0:
+        op = "*"
+    value = {"+": a + b, "-": a - b, "*": a * b, "/": a / b if b else a}[op]
+    return f"({left}) {op} ({right})", value
+
+
+def exact_mode(base, t, rng, count):
+    for _ in range(count):
+        text, value = exact_expression(rng, 3)
+        if len(text) > 500:
+            continue
+        out = compute(base, op="eval", expr=text, mode="exact")
+        shown = out.get("content", {}).get("value", {})
+        got = shown.get("text") if shown.get("kind") == "integer" else f"{shown.get('num')}/{shown.get('den')}"
+        want = str(value.numerator) if value.denominator == 1 else f"{value.numerator}/{value.denominator}"
+        t.check("exact x fractions", out.get("nature") == "exact" and got == want, f"{text}: {out}")
+
+
+HEAVY = "3^165000 / 7^93000 + 5^112000 / 11^75000 + 13^70000 / 17^64000 + 19^61000 / 23^57000"
+
+
+def budget(base, t):
+    """Pior caso real: prazo de 2 s e 4 vagas. Só as folgas vêm desta medição; o prazo está no servidor."""
+    started = time.time()
+    out = compute(base, op="eval", expr=HEAVY, mode="exact")
+    elapsed = time.time() - started
+    print(f"conta pesada: {elapsed:.2f} s, {out['status']}, {out.get('refusal', {}).get('code')}")
+    t.check("prazo respeitado", out.get("refusal", {}).get("code") == "limit_time" and elapsed < 2.5, f"{elapsed:.2f} s: {str(out)[:200]}")
+
+    results = []
+    def worker():
+        begin = time.time()
+        results.append((compute(base, op="eval", expr=HEAVY, mode="exact"), time.time() - begin))
+    threads = [threading.Thread(target=worker) for _ in range(12)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    codes = sorted(r[0].get("refusal", {}).get("code", "ok") for r in results)
+    slowest = max(r[1] for r in results)
+    print(f"12 simultâneas: {codes.count('limit_time')} por tempo, {codes.count('limit_concurrency')} sem vaga, a mais lenta {slowest:.2f} s")
+    t.check("concorrência limitada", codes.count("limit_concurrency") >= 8 and codes.count("limit_time") <= 4 and slowest < 3.0, f"{codes} {slowest:.2f}")
+
+    # Cliente desiste no meio: a vaga precisa voltar bem antes do prazo de 2 s.
+    addr = urllib.parse.urlparse(base)
+    payload = json.dumps(dict(op="eval", expr=HEAVY, mode="exact")).encode()
+    connections = []
+    for _ in range(4):
+        connection = http.client.HTTPConnection(addr.hostname, addr.port)
+        connection.request("POST", "/v1/compute", payload, {"Content-Type": "application/json"})
+        connections.append(connection)
+    time.sleep(0.2)
+    blocked = compute(base, op="eval", expr="1 + 1").get("refusal", {}).get("code")
+    for connection in connections:
+        connection.close()
+    begin, freed = time.time(), None
+    while time.time() - begin < 3:
+        if compute(base, op="eval", expr="1 + 1").get("status") == "success":
+            freed = time.time() - begin
+            break
+        time.sleep(0.01)
+    print(f"desistência: antes {blocked}, vaga de volta em {freed if freed is None else round(freed, 3)} s")
+    t.check("desistir libera a vaga", blocked == "limit_concurrency" and freed is not None and freed < 1.0, f"{blocked} {freed}")
 
 
 def primitives(base, t, rng, count):
@@ -190,6 +273,8 @@ def main():
     roots(args.base, t, rng, args.count)
     newton(args.base, t, rng, args.count)
     contract(args.base, t)
+    exact_mode(args.base, t, rng, args.count)
+    budget(args.base, t)
     primitives(args.base, t, rng, args.count)
     derivatives(args.base, t, rng, args.count)
     print(f"NumPy {np.__version__}, semente {args.seed}")

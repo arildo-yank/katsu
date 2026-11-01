@@ -1,8 +1,6 @@
 # Contrato de resultados do Katu e primeiro recorte exato
 
-Data: 01/11/2026. Estado: seções 1 a 5 implementadas em `POST /v1/compute` sobre as operações atuais, como versão provisória
-até a revisão da tarefa C1; seções 6 a 8 ainda sem implementação, salvo o modo `exact`, que por enquanto só aceita contas em
-inteiros e recusa o resto. Detalha a seção 4 do
+Data: 01/11/2026. Estado: seções 1 a 6 implementadas em `POST /v1/compute`, ainda sem consumidor; os modos exatos valem só para `eval`. Unidades (seção 7) sem implementação. Revisão da tarefa C1 parcial. Detalha a seção 4 do
 [plano do motor computacional](KATU_MOTOR_COMPUTACIONAL_PLAN.md). Exemplos JSON são normativos quanto aos campos;
 valores são ilustrativos, exceto na tabela de gabaritos.
 
@@ -15,6 +13,13 @@ valores são ilustrativos, exceto na tabela de gabaritos.
 4. Não existe selo genérico de "verificado". `evidence.checks` lista o que foi feito, um item por verificação.
 5. O modelo de linguagem recebe o resultado inteiro e não pode acrescentar número, fonte ou passo ausente dele.
 6. Campo que não se aplica é omitido, nunca preenchido com zero, texto vazio ou palpite.
+
+## Decisões registradas
+
+- **01/11/2026, pelo usuário:** `det` igual a zero em ponto flutuante é `inconclusive`, porque pede análise de condicionamento
+  e não prova singularidade. Já era o comportamento de `/v1/compute`; `/math` segue devolvendo `0`, por compatibilidade.
+- **01/11/2026, pelo usuário:** aprovada a implementação dos tipos exatos (C4 e C5).
+- **Pendente:** o restante do contrato, em especial polo como `inconclusive` e os limites da seção 6.
 
 ## 2. Envelope
 
@@ -44,8 +49,9 @@ valores são ilustrativos, exceto na tabela de gabaritos.
 ```
 
 `content.value.kind` é `number`, `expression`, `matrix` ou `vector`; com o tipo exato, entram `integer` e `rational`, com os
-dígitos em texto. `steps` e `warnings` estão sempre presentes, mesmo vazios. Reservados para etapas seguintes: `unit`,
-`domain`, `assumptions`, `decimal_preview`, `provenance.git`, `usage.limit_hit`.
+dígitos em texto: `{"kind": "integer", "text": "1024"}` e `{"kind": "rational", "num": "3", "den": "10"}`, com
+`decimal_preview`. `steps` e `warnings` estão sempre presentes, mesmo vazios. `usage.limit_hit` diz qual limite foi atingido.
+Reservados para etapas seguintes: `unit`, `domain`, `assumptions`, `provenance.git`.
 
 Quando `status` não é `success`, `content.value` é omitido e o campo `refusal` é obrigatório:
 
@@ -98,8 +104,8 @@ qualificador.
 
 `parse_error`, `invalid_argument`, `domain_error`, `division_by_zero`, `missing_variable`, `pole_or_jump`, `no_sign_change`,
 `not_converged`, `singular_matrix`, `near_singular_matrix`, `not_representable`, `no_closed_form`, `exact_mode_unavailable`,
-`verification_failed`, `limit_size`, `limit_depth`, `limit_evaluations`. Previstos para etapas seguintes: `dimension_mismatch`,
-`ambiguous_temperature`, `unknown_unit`, `limit_time`, `limit_memory`.
+`verification_failed`, `limit_size`, `limit_depth`, `limit_evaluations`, `limit_time`, `limit_concurrency`, `cancelled`. Previstos
+para etapas seguintes: `dimension_mismatch`, `ambiguous_temperature`, `unknown_unit`, `limit_memory`.
 
 Definidos em `katu_math::ErrorCode`, que também diz o `status` de cada código.
 
@@ -138,10 +144,17 @@ são a forma de não ligar um polo com uma reta falsa. O núcleo gera a geometri
 
 - `exact`: ou sai exato, ou recusa com `exact_mode_unavailable`. Nunca cai para ponto flutuante.
 - `numeric`: f64, como hoje.
-- `auto`: tenta exato; se precisar aproximar, responde `nature: "numeric"` e um aviso dizendo qual operação forçou isso.
+- `auto`: tenta exato; se precisar aproximar, responde `nature: "numeric"` e o aviso `exact_unavailable` dizendo o motivo. Só
+  aproxima quando o exato não está disponível, passa do tamanho ou passa do prazo. Erro de verdade, como `1/0` ou `0^0`, segue
+  como recusa, mesmo que f64 tivesse um número para dar.
 
-**Tipos**, sem dependência nova, implementados no katu-math: `Int` (inteiro de tamanho arbitrário) e `Rational`
-(sempre em forma reduzida, com denominador positivo). Decimais de dinheiro, complexos e precisão arbitrária ficam em
+Por ora os modos exatos valem para `eval`. Nas demais operações, `exact` recusa e `auto` responde como `numeric`.
+
+**Tipos**, sem dependência nova, em `katu_math::exact`: `Int` (inteiro de tamanho arbitrário) e `Rational` (sempre em forma
+reduzida, com denominador positivo). Existem e estão testados, mas ainda sem rota: ligar a `/v1/compute` é a tarefa C7. `rug`
+foi descartado por trazer GMP, código de terceiro e licença LGPL, contra a direção de implementação própria do plano;
+`BigDecimal` não serve como base porque não representa 1/3. Tipo exato só resolve o que fecha em racionais: raiz, pi e
+seno continuam em f64. Decimais de dinheiro, complexos e precisão arbitrária ficam em
 etapas próprias da Fase 2.
 
 **Semântica:**
@@ -155,7 +168,7 @@ etapas próprias da Fase 2.
 | `a^(p/q)` não inteiro | `exact_mode_unavailable`, mesmo quando o resultado é racional. `sqrt(4)` também, neste recorte |
 | `pi`, `e`, `sin`, `ln`, `exp` | `exact_mode_unavailable`, salvo `auto`, que aproxima e avisa |
 | `abs`, negação, comparação | Exatas |
-| Variáveis | Valores passados como texto (`"1/3"`, `"0.1"`) continuam exatos; número JSON passado em `exact` é recusado, porque já chegou binário |
+| Variáveis | Texto (`"1/3"`, `"0.1"`) e inteiro JSON continuam exatos; decimal JSON é recusado em `exact`, porque já chegou binário |
 
 **Conversões.** Exato para f64 só de forma explícita, em `decimal_preview` ou `auto`, com arredondamento para o mais
 próximo e empate para par. Se a conversão perder valor, `decimal_preview.exact` é `false`. Nenhuma conversão de f64 para
@@ -163,8 +176,13 @@ exato acontece sozinha.
 
 **Saída.** Inteiros grandes e racionais saem em JSON como texto, pois número JSON perderia dígitos.
 
-**Limites**, ajustáveis após medição: entrada de até 500 bytes (atual), profundidade 48 (atual), 262.144 bits por
-inteiro e estimativa de bits antes de calcular potência, para `2^(10^9)` sair como `limit_size` sem alocar nada.
+**Limites em `/v1/compute`**: entrada de até 500 bytes, profundidade 48, 262.144 bits por inteiro, estimativa de bits antes de
+calcular potência, 2 s por conta e 4 contas simultâneas; a quinta recebe `limit_concurrency`, sem fila. O prazo é cooperativo:
+as contas caras conferem nos laços. Se o cliente desiste, a conta é cancelada e a vaga volta. Memória é limitada pelos tamanhos,
+mas sem teto próprio nem medição (`limit_memory` segue previsto). `/math` e o Python seguem sem prazo, como antes.
+
+Medido no Apple M3, em release: `2^(10^9)` recusado em 1,3 µs; reduzir um racional no limite, 1,4 s; a conta mais pesada testada
+parou em 2,00 s; de 12 simultâneas, 4 pararam por tempo e 8 ficaram sem vaga, a mais lenta em 2,00 s.
 
 ## 7. Primeiro recorte: unidades
 
@@ -210,6 +228,7 @@ Escritos à mão, a partir das definições. Entram como testes antes da impleme
 | `(1/3) * 3` | exact | `1` |
 | `1/0` | exact | `invalid_input` / `division_by_zero` |
 | `0^0` | exact | `invalid_input` / `domain_error` |
+| `0^-1` | exact | `invalid_input` / `division_by_zero` |
 | `sqrt(2)` | exact | `unsupported` / `exact_mode_unavailable` |
 | `sqrt(2)` | auto | `numeric`, com aviso |
 | `2^(10^9)` | exact | `resource_limit` / `limit_size`, sem alocar |
