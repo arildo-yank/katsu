@@ -2,7 +2,7 @@
 //! `docs/KATU_CONTRATO_RESULTADOS.md`. Recusa é resultado e volta com HTTP 200; 400 fica para pedido
 //! malformado. Em `exact` e `auto`, uma conta de `eval` tenta os racionais de `katu_math::exact`; o resto é
 //! de `math::solve`, e esta camada só descreve o que aconteceu. Toda conta tem prazo e vaga limitada.
-use crate::math::{add_latex, failure, solve, Request};
+use crate::math::{add_latex, failure, solve, tex_rational, Request};
 use axum::{extract::rejection::JsonRejection, http::StatusCode, Json};
 use katu_math::budget::with_budget;
 use katu_math::linalg::{multiply, Matrix};
@@ -275,22 +275,6 @@ fn exact_vars(request: &Value) -> Result<Option<HashMap<String, Rational>>, Math
         out.insert(name.clone(), exact);
     }
     Ok(Some(out))
-}
-
-fn tex_rational(value: &Rational) -> String {
-    if value.is_integer() {
-        return value.to_string();
-    }
-    let sign = if value.numerator().is_negative() {
-        "-"
-    } else {
-        ""
-    };
-    format!(
-        "{sign}\\frac{{{}}}{{{}}}",
-        value.numerator().abs(),
-        value.denominator()
-    )
 }
 
 fn has_long_literal(text: &str) -> bool {

@@ -11,7 +11,7 @@ recorte das fases 3 a 6, com aritmética exata, álgebra básica, cálculo já s
 | A1 | Feita: integrado em `feat/katsu-lm-v1`, sem push, compilado e no ar no `Arandu V2.app`, conferido em 01/11/2026. O binário anterior está em `katu-server.antes-2026-11-01` |
 | A2, A3 | Feitas: [KATU_INVENTARIO.md](KATU_INVENTARIO.md) |
 | B1, B4 | Feitas |
-| C1 | **Pendente de revisão humana.** C2 e C3 aplicam o contrato como versão provisória |
+| C1 | Feita em 01/11/2026: det zero e polo como `inconclusive`; registrada no contrato |
 | A7 | Feita e instalada |
 | C2, C3 | Feitas e integradas, sem consumidor ainda; o Arandu segue em `/math` |
 | C4, C5, C7, C8 | Feitas e integradas (`ca84f08`), compiladas às 21:11 e no ar só na próxima abertura do app: `katu_math::exact`, `katu_math::budget`, modos em `/v1/compute`. C7 só em `eval`; C8 sem teto de memória |

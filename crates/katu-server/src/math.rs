@@ -1,18 +1,26 @@
 //! Rota `POST /math`: entrada matemática direta para o `katu-math`, sem o modelo. A resposta diz o método
 //! e se o resultado é aproximado; o que o motor recusa volta como erro 400, nunca como número.
 use axum::{extract::rejection::JsonRejection, http::StatusCode, Json};
+use katu_math::budget::with_budget;
 use katu_math::linalg::{self, Matrix};
 use katu_math::{
-    antiderivative, bisect, derivative_at, diff, eval, exact_value, integrate, latex, newton,
-    parse, rk4, understand, ErrorCode, Expr, Intent, MathError, Vars,
+    antiderivative, bisect, derivative_at, diff, eval, exact_eval, exact_value, integrate, latex,
+    newton, parse, rk4, understand, ErrorCode, Expr, Intent, MathError, Rational, Vars,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::{collections::HashMap, time::Instant};
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
 
 const MAX_ODE_STEPS: usize = 100_000;
 const DEFAULT_TOL: f64 = 1e-9;
 const MIN_TOL: f64 = 1e-12;
+const CHAT_TIME_LIMIT: Duration = Duration::from_secs(2);
+/// Cerca de 300 dígitos: acima disto, a resposta do chat deixaria de ser legível.
+const CHAT_MAX_BITS: u64 = 1000;
+const CHAT_PLACES: u32 = 10;
 const ROUNDING: &str =
     "Calculado em ponto flutuante; as últimas casas podem ter erro de arredondamento.";
 
@@ -428,14 +436,7 @@ fn latex_block(tex: &str) -> String {
 /// Resposta do pedido escrito, em Markdown com LaTeX, sempre mostrando o que foi entendido.
 fn explain(intent: Intent) -> Value {
     let (understood, result): (String, Result<(String, bool, String), MathError>) = match intent {
-        Intent::Calculate(e) => (
-            latex(&e),
-            eval(&e, &Vars::new()).map(|v| {
-                let exact = exact_value(&e, &Vars::new());
-                let note = if exact { "" } else { ROUNDING };
-                (number_latex(v), !exact, note.to_owned())
-            }),
-        ),
+        Intent::Calculate { expr: e, text } => (latex(&e), calculate(&e, text.as_deref())),
         Intent::Antiderivative { expr, var } => (
             format!("\\int {}\\,d{var}", wrapped(&expr)),
             antiderivative(&expr, &var).map(|p| {
@@ -518,6 +519,66 @@ fn explain(intent: Intent) -> Value {
             json!({"understood": true, "ok": false, "markdown": markdown, "input_latex": understood, "error": why.to_string()})
         }
     }
+}
+
+/// \\frac{n}{d} ou só os dígitos do inteiro.
+pub(super) fn tex_rational(value: &Rational) -> String {
+    if value.is_integer() {
+        return value.to_string();
+    }
+    let sign = if value.numerator().is_negative() {
+        "-"
+    } else {
+        ""
+    };
+    format!(
+        "{sign}\\frac{{{}}}{{{}}}",
+        value.numerator().abs(),
+        value.denominator()
+    )
+}
+
+/// Decimal, quando ele é o valor inteiro; senão a fração, com o decimal cortado depois do aproximado.
+fn exact_answer_latex(value: &Rational) -> String {
+    let fraction = tex_rational(value);
+    if value.is_integer() {
+        return fraction;
+    }
+    let comma = |text: String| text.replace('.', "{,}");
+    match value.decimal_preview(CHAT_PLACES) {
+        Ok((text, true)) => format!("{} = {fraction}", comma(text)),
+        Ok((text, false)) => format!("{fraction} \\approx {}", comma(text)),
+        Err(_) => fraction,
+    }
+}
+
+/// Conta do chat: exata quando fecha em racionais. Se o resultado não couber numa resposta legível, ou a
+/// conta não tiver forma exata, fica em f64 e o rótulo diz. Erro de verdade continua erro.
+fn calculate(e: &Expr, text: Option<&str>) -> Result<(String, bool, String), MathError> {
+    if let Some(text) = text {
+        match with_budget(CHAT_TIME_LIMIT, None, || exact_eval(text)) {
+            Ok(value)
+                if value.numerator().bits() <= CHAT_MAX_BITS
+                    && value.denominator().bits() <= CHAT_MAX_BITS =>
+            {
+                return Ok((exact_answer_latex(&value), false, String::new()));
+            }
+            Err(why)
+                if matches!(
+                    why.code,
+                    ErrorCode::DivisionByZero | ErrorCode::DomainError | ErrorCode::ParseError
+                ) =>
+            {
+                return Err(why);
+            }
+            _ => {}
+        }
+    }
+    eval(e, &Vars::new()).map(|v| {
+        let exact = exact_value(e, &Vars::new());
+        let note = if exact { "" } else { ROUNDING };
+        (number_latex(v), !exact, note.to_owned())
+    })
 }
 
 /// Procura uma troca de sinal em janelas crescentes em volta de zero e refina por bisseção.
@@ -724,9 +785,34 @@ mod tests {
             .get("value_at_approximate")
             .is_none());
         assert_eq!(
-            explain(understand("calcule 1/3").unwrap())["approximate"],
+            explain(understand("calcule sqrt(2)").unwrap())["approximate"],
             true
         );
+    }
+
+    #[test]
+    fn written_requests_use_exact_arithmetic_when_they_can() {
+        let ask = |text: &str| explain(understand(text).unwrap());
+        for (text, want) in [
+            ("0.1 + 0.2", "0{,}3 = \\frac{3}{10}"),
+            ("calcule 1/3 + 1/6", "0{,}5 = \\frac{1}{2}"),
+            ("quanto é 1/3", "\\frac{1}{3} \\approx 0{,}3333333333"),
+            ("(12+8)*3", "60"),
+            ("2^100", "1267650600228229401496703205376"),
+            ("15 / 100 * 2300", "345"),
+        ] {
+            let out = ask(text);
+            assert_eq!(out["result_latex"], want, "{text}: {out}");
+            assert_eq!(out["approximate"], false, "{text}");
+        }
+        // Sem forma exata, ou grande demais para ler: f64, marcado como tal.
+        for text in ["calcule sqrt(2)", "calcule pi / 2", "1.5^1000"] {
+            let out = ask(text);
+            assert_eq!(out["approximate"], true, "{text}: {out}");
+        }
+        // Erro de verdade não vira número, mesmo que f64 diga que 0^0 é 1.
+        assert_eq!(ask("0^0 + 1")["ok"], false);
+        assert_eq!(ask("calcule 1/0")["ok"], false);
     }
 
     /// As reproduções da auditoria, pelo mesmo caminho que o Arandu usa.

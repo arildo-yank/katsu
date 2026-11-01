@@ -5,7 +5,12 @@ use super::{parse, Expr, Func};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Intent {
-    Calculate(Expr),
+    /// `text` é a conta como foi escrita, já na gramática, para a aritmética exata: o f64 de `expr` já
+    /// perdeu dígitos. `None` quando a conta foi montada aqui, como a raiz de um número.
+    Calculate {
+        expr: Expr,
+        text: Option<String>,
+    },
     Antiderivative {
         expr: Expr,
         var: String,
@@ -127,6 +132,19 @@ fn normalize(text: &str) -> Option<String> {
 }
 
 fn expression(text: &str) -> Option<Expr> {
+    parse(&in_grammar(text)?).ok()
+}
+
+fn calculation(text: &str) -> Option<Intent> {
+    let written = in_grammar(text)?;
+    let expr = parse(&written).ok()?;
+    (!has_variable(&expr)).then_some(Intent::Calculate {
+        expr,
+        text: Some(written),
+    })
+}
+
+fn in_grammar(text: &str) -> Option<String> {
     let mut body = text.trim().trim_end_matches(['?', '.', '!', ':', ' ']);
     for prefix in [
         "de ",
@@ -152,7 +170,7 @@ fn expression(text: &str) -> Option<Expr> {
     if body.trim().is_empty() {
         return None;
     }
-    parse(&normalize(body)?).ok()
+    normalize(body)
 }
 
 fn number(text: &str) -> Option<f64> {
@@ -293,7 +311,10 @@ pub fn understand(text: &str) -> Option<Intent> {
             let var = variable(&expr, None);
             Intent::Root { expr, var }
         } else {
-            Intent::Calculate(Expr::Call(Func::Sqrt, Box::new(expr)))
+            Intent::Calculate {
+                expr: Expr::Call(Func::Sqrt, Box::new(expr)),
+                text: None,
+            }
         });
     }
     if let Some(rest) = after(
@@ -317,14 +338,12 @@ pub fn understand(text: &str) -> Option<Intent> {
             let var = variable(&expr, None);
             return Some(Intent::Root { expr, var });
         }
-        let expr = expression(body)?;
-        return (!has_variable(&expr)).then_some(Intent::Calculate(expr));
+        return calculation(body);
     }
     // Só a conta, sem palavras: precisa ter dígito e operador, para não pegar "x" ou "2026".
     let plain = t.trim_end_matches(['?', '=', ' ']);
     if plain.chars().any(|c| c.is_ascii_digit()) && plain.chars().any(|c| "+-*/^".contains(c)) {
-        let expr = expression(plain)?;
-        return (!has_variable(&expr)).then_some(Intent::Calculate(expr));
+        return calculation(plain);
     }
     None
 }
@@ -342,7 +361,7 @@ mod tests {
     fn shown(text: &str) -> String {
         match understand(text) {
             None => "nada".into(),
-            Some(Intent::Calculate(e)) => format!("conta {e}"),
+            Some(Intent::Calculate { expr, .. }) => format!("conta {expr}"),
             Some(Intent::Antiderivative { expr, var }) => format!("primitiva {expr} d{var}"),
             Some(Intent::Definite {
                 expr,
