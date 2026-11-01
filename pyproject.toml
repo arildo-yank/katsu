@@ -3,13 +3,24 @@ requires = ["maturin>=1.9.4,<2"]
 build-backend = "maturin"
 
 [project]
-name = "katsu"
+name = "katu"
 dynamic = ["version"]
 requires-python = ">=3.10"
-description = "Rust tensor foundation for explainable deep learning"
+description = "Katu: typed N-d arrays, a blocked GEMM and symbolic calculus, computed in Rust"
+readme = "README.md"
 license = "MIT"
+authors = [{ name = "Arildo Yank" }]
+keywords = ["arrays", "gemm", "calculus", "deep-learning", "rust"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering :: Mathematics",
+]
+
+[project.urls]
+Repository = "https://github.com/arildo-yank/katsu"
 
 [tool.maturin]
-manifest-path = "crates/katsu-python/Cargo.toml"
+manifest-path = "crates/katu-python/Cargo.toml"
 python-source = "python"
-module-name = "katsu._native"
+module-name = "katu._native"

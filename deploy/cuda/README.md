@@ -10,8 +10,8 @@ usado num host Linux com GPU NVIDIA, driver e NVIDIA Container Toolkit disponív
 Não há preço/capacidade de provedor presumidos.
 
 ```sh
-docker build -t katsu-cuda -f deploy/cuda/Dockerfile .
-docker run --rm --gpus all -v "$PWD:/workspace" katsu-cuda
+docker build -t katu-cuda -f deploy/cuda/Dockerfile .
+docker run --rm --gpus all -v "$PWD:/workspace" katu-cuda
 ```
 
 O container não publica portas. Faz download das dependências de build, mas não
@@ -40,7 +40,7 @@ O orçamento deve caber na memória **disponível** do host, deixando margem par
 processos, contexto CUDA e cópias. Não copie cegamente o exemplo de orçamento:
 
 ```sh
-cargo run --release -p katsu-core --features cuda --example train_native -- \
+cargo run --release -p katu-core --features cuda --example train_native -- \
   --corpus corpus --tokenizer runs/native-smoke-20261024/tokenizer.bpe \
   --profile 139m --batch-size 1 --sequence-length 16 --steps 10 \
   --backend cuda --memory-budget-mib 8192 --output runs/cuda-139m-001

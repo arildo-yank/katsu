@@ -11,10 +11,10 @@ A versão nos manifests é 0.1.0. Ainda não foi estabelecida uma release public
 - Grafo dinâmico com autograd reverso, VJP e acumulação de gradientes.
 - Conv2D NCHW/OIHW com stride, padding e derivadas de entrada/pesos.
 - Acesso ao mapa de ativação e limpeza do cache da camada.
-- Katsu LM, modelo de linguagem de caracteres (`KatsuLmConfig`, `CharTokenizer`), geração com temperatura,
-  checkpoint binário (`save_params`/`load_params`) e exemplo `katsu_lm`.
-- Matmul e seu backward com laços vetorizáveis: ~11× mais rápido no treino do Katsu LM.
-- Katsu LM v1: atenção com várias cabeças (`heads`), 4 camadas × 4 cabeças, ~481 mil
+- Katu LM, modelo de linguagem de caracteres (`KatuLmConfig`, `CharTokenizer`), geração com temperatura,
+  checkpoint binário (`save_params`/`load_params`) e exemplo `katu_lm`.
+- Matmul e seu backward com laços vetorizáveis: ~11× mais rápido no treino do Katu LM.
+- Katu LM v1: atenção com várias cabeças (`heads`), 4 camadas × 4 cabeças, ~481 mil
   parâmetros; treino com uma pasta de obras e validação por obra; vocabulário salvo
   junto do checkpoint; `scripts/fetch-corpus.sh` e [corpus](docs/corpus.md) com 22 obras.
 - 49 testes de integração, incluindo diferenças finitas, grafo profundo e convergência.
@@ -31,6 +31,6 @@ A versão nos manifests é 0.1.0. Ainda não foi estabelecida uma release public
 
 ### Limitações conhecidas
 
-- Python expõe somente a versão; não há katsu.Tensor ou wheel validado.
+- Python expõe somente a versão; não há katu.Tensor ou wheel validado.
 - Sem mini-batches, GPU, Grad-CAM ou serviço HTTP; transpose/reshape copiam dados.
 - CPU single-thread; sem comparação de performance com outros frameworks.

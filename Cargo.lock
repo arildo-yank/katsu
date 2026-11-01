@@ -247,7 +247,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
-name = "katsu-core"
+name = "katu-core"
 version = "0.1.0"
 dependencies = [
  "cudarc",
@@ -255,19 +255,20 @@ dependencies = [
 ]
 
 [[package]]
-name = "katsu-math"
+name = "katu-math"
 version = "0.1.0"
 
 [[package]]
-name = "katsu-python"
+name = "katu-python"
 version = "0.1.0"
 dependencies = [
- "katsu-core",
+ "katu-core",
+ "katu-math",
  "pyo3",
 ]
 
 [[package]]
-name = "katsu-rag"
+name = "katu-rag"
 version = "0.1.0"
 dependencies = [
  "serde",
@@ -275,13 +276,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "katsu-server"
+name = "katu-server"
 version = "0.1.0"
 dependencies = [
  "axum",
- "katsu-core",
- "katsu-math",
- "katsu-rag",
+ "katu-core",
+ "katu-math",
+ "katu-rag",
  "serde",
  "serde_json",
  "tokio",

@@ -9,7 +9,7 @@ def digest(b): return hashlib.sha256(b).hexdigest()
 def fetch(url):
     for attempt in range(2):
         try:
-            with urllib.request.urlopen(urllib.request.Request(url,headers={'User-Agent':'Katsu-corpus/0.1 (open research dataset builder)'}),timeout=15) as r:return r.read()
+            with urllib.request.urlopen(urllib.request.Request(url,headers={'User-Agent':'Katu-corpus/0.1 (open research dataset builder)'}),timeout=15) as r:return r.read()
         except Exception:
             if attempt==1:raise
             time.sleep(1+attempt)

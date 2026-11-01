@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Compila o katsu-server (release, com CUDA) duas vezes, em duas cópias do código em caminhos
+# Compila o katu-server (release, com CUDA) duas vezes, em duas cópias do código em caminhos
 # diferentes, sem rede, e compara o SHA-256 dos binários. Iguais = quem compilar o mesmo fonte com
 # o mesmo compilador obtém o mesmo binário, e pode conferir o que recebeu.
 #
@@ -31,26 +31,26 @@ directory = "vendor"
 [net]
 offline = true
 TOML
-  # Caminhos da máquina saem do binário: o fonte vira /katsu, o cargo home /cargo e o toolchain
+  # Caminhos da máquina saem do binário: o fonte vira /katu, o cargo home /cargo e o toolchain
   # (que traz o nome do usuário) /rust. No macOS, -Wl,-S impede o linker de gravar os caminhos dos
   # .o intermediários, que entrariam no cálculo do LC_UUID e mudariam o binário de pasta para pasta.
-  local flags="--remap-path-prefix=$src=/katsu --remap-path-prefix=$src/.home=/cargo --remap-path-prefix=$sysroot=/rust"
+  local flags="--remap-path-prefix=$src=/katu --remap-path-prefix=$src/.home=/cargo --remap-path-prefix=$sysroot=/rust"
   [ "$(uname)" = Darwin ] && flags="$flags -C link-arg=-Wl,-S"
   (cd "$src" && CARGO_HOME="$src/.home" CARGO_TARGET_DIR="$src/target" RUSTFLAGS="$flags" \
-    cargo build -q --release --locked --offline -p katsu-server --features cuda)
+    cargo build -q --release --locked --offline -p katu-server --features cuda)
 }
 
-build "$work/a/katsu"
-build "$work/b/outro/caminho/katsu"
-bins=$(cd "$work/a/katsu/target/release" && find . -maxdepth 1 -type f -perm -u+x | LC_ALL=C sort)
+build "$work/a/katu"
+build "$work/b/outro/caminho/katu"
+bins=$(cd "$work/a/katu/target/release" && find . -maxdepth 1 -type f -perm -u+x | LC_ALL=C sort)
 fail=0
 for bin in $bins; do
-  a=$(shasum -a 256 "$work/a/katsu/target/release/$bin" | cut -d' ' -f1)
-  b=$(shasum -a 256 "$work/b/outro/caminho/katsu/target/release/$bin" | cut -d' ' -f1)
+  a=$(shasum -a 256 "$work/a/katu/target/release/$bin" | cut -d' ' -f1)
+  b=$(shasum -a 256 "$work/b/outro/caminho/katu/target/release/$bin" | cut -d' ' -f1)
   if [ "$a" = "$b" ]; then echo "igual     ${bin#./}  $a"; else echo "DIFERENTE ${bin#./}  $a $b"; fail=1; fi
 done
 for bin in $bins; do
-  if strings "$work/a/katsu/target/release/$bin" | grep -qE "$HOME|$work"; then
+  if strings "$work/a/katu/target/release/$bin" | grep -qE "$HOME|$work"; then
     echo "AVISO: ${bin#./} ainda contém um caminho desta máquina"; fail=1
   fi
 done

@@ -1,4 +1,4 @@
-# Katsu — lançamento de prévia técnica
+# Katu — lançamento de prévia técnica
 
 Status: textos preparados para revisão, ainda não publicados.
 
@@ -6,11 +6,11 @@ Status: textos preparados para revisão, ainda não publicados.
 
 Título:
 
-Show HN: Katsu – A Rust tensor engine with autograd and Conv2D
+Show HN: Katu – A Rust tensor engine with autograd and Conv2D
 
 Texto:
 
-I'm building Katsu, an open-source Rust deep learning engine with a longer-term
+I'm building Katu, an open-source Rust deep learning engine with a longer-term
 focus on explainability. This is an early technical preview.
 
 The current core implements contiguous CPU tensors, reverse-mode autograd, and
@@ -31,7 +31,7 @@ Repository: https://github.com/arildo-yank/katsu
 
 ## Texto para uma landing page
 
-### Katsu — construa e inspecione os primeiros passos de uma rede neural
+### Katu — construa e inspecione os primeiros passos de uma rede neural
 
 Um núcleo open-source em Rust com tensores, diferenciação automática e convolução
 2D. Em desenvolvimento, com explicabilidade como direção do projeto.
@@ -56,7 +56,7 @@ Chamada principal: **Ver o código no GitHub**
 Chamada secundária: **Executar o exemplo Conv2D**
 
 ```sh
-cargo run -p katsu-core --release --example conv2d
+cargo run -p katu-core --release --example conv2d
 ```
 
 Licença MIT. Prévia técnica CPU single-thread; ainda não é uma alternativa completa
@@ -66,8 +66,8 @@ a frameworks de treinamento estabelecidos.
 
 - Substituir o campo de URL pelo repositório público real.
 - Aguardar uma execução do CI antes de mostrar um badge de testes aprovados.
-- Não anunciar `pip install katsu` até disponibilizar e verificar o pacote correto.
-- Não usar “powered by Katsu” em projetos que ainda não executam o Katsu.
+- Não anunciar `pip install katu` até disponibilizar e verificar o pacote correto.
+- Não usar “powered by Katu” em projetos que ainda não executam o Katu.
 - Não apresentar mapas de atribuição como explicações exatas ou causais de decisões.
 - Manter comparação com PyTorch para depois de medir cargas equivalentes.
 

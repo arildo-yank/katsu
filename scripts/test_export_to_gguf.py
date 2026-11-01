@@ -56,8 +56,8 @@ class ExportTests(unittest.TestCase):
     def test_export_preserves_every_byte_and_bpe(self):
         output=self.root/'model.gguf';exporter.export(self.root,output)
         metadata,tensors=read_gguf(output)
-        self.assertEqual(metadata['general.architecture'],'katsu')
-        self.assertEqual(metadata['tokenizer.katsu.merge_ids'],[97,97])
+        self.assertEqual(metadata['general.architecture'],'katu')
+        self.assertEqual(metadata['tokenizer.katu.merge_ids'],[97,97])
         alphabet=exporter.byte_alphabet();inverse={c:b for b,c in alphabet.items()}
         decoded=[bytes(inverse[c] for c in text) for text in metadata['tokenizer.ggml.tokens']]
         self.assertEqual(decoded,[bytes([i]) for i in range(256)]+[b'aa'])
@@ -87,7 +87,7 @@ class ExportTests(unittest.TestCase):
                 f.write(struct.pack('<'+'f'*n,*([0.0]*n)))
         out=self.root/'special.gguf';exporter.export(self.root,out)
         m,_=read_gguf(out)
-        self.assertEqual(m['tokenizer.katsu.special_ids'],[257,258,259,260])
+        self.assertEqual(m['tokenizer.katu.special_ids'],[257,258,259,260])
         self.assertEqual(m['tokenizer.ggml.eos_token_id'],260)
         self.assertEqual(m['tokenizer.ggml.tokens'][-1],'<|end|>')
 

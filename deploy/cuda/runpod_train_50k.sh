@@ -12,7 +12,7 @@
 # compilação e a medida da loss de validação (1.000 exemplos) antes e depois. MAX_HOURS corta só o
 # treino; o pod cobra também o envio, a compilação e o tempo até o Stop.
 #
-# KATSU_RESIDENT=1 é o motor híbrido antigo (ENGINE=hybrid), não o motor GPU: não exporte aqui.
+# KATU_RESIDENT=1 é o motor híbrido antigo (ENGINE=hybrid), não o motor GPU: não exporte aqui.
 # Qualquer variável abaixo pode ser sobrescrita na chamada (ex.: MAX_HOURS=2 ./deploy/...).
 set -euo pipefail
 export DATA=${DATA:-data/sft/distill_arandu_50k}

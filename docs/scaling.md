@@ -1,4 +1,4 @@
-# Escala do Katsu: CPU, BPE e batches
+# Escala do Katu: CPU, BPE e batches
 
 Esta etapa usa o motor Rust e seu autograd/Adam, sem PyTorch ou pesos externos.
 O núcleo numérico continua em f32; Rayon é a primeira dependência do core.
@@ -27,7 +27,7 @@ Os novos perfis precisam do tokenizer e `config.json` correspondentes ao checkpo
 ## Treinar BPE nas obras locais
 
 ```sh
-cargo run --release -p katsu-core --example train_bpe -- corpus corpus-32k.bpe 32000
+cargo run --release -p katu-core --example train_bpe -- corpus corpus-32k.bpe 32000
 ```
 
 O corpus é lido em ordem alfabética. Cada obra é dividida em 90% treino e 10%
@@ -44,7 +44,7 @@ Não é compatível com o tokenizer HuggingFace do protótipo Python do Arandu.
 ## Treino real pequeno no Mac
 
 ```sh
-RAYON_NUM_THREADS=4 cargo run --release -p katsu-core --example train_native -- \
+RAYON_NUM_THREADS=4 cargo run --release -p katu-core --example train_native -- \
   --corpus corpus --tokenizer corpus-32k.bpe --profile tiny \
   --batch-size 2 --steps 10 --backend cpu --output runs/native-smoke-001
 ```
@@ -58,9 +58,9 @@ Somente os pesos são salvos: estado do Adam e retomada ainda não implementados
 ## Perfis grandes: descrever antes de alocar
 
 ```sh
-cargo run --release -p katsu-core --example train_native -- \
+cargo run --release -p katu-core --example train_native -- \
   --tokenizer corpus-32k.bpe --profile 139m --describe
-cargo run --release -p katsu-core --example train_native -- \
+cargo run --release -p katu-core --example train_native -- \
   --tokenizer corpus-32k.bpe --profile 349m --describe
 ```
 
@@ -95,15 +95,15 @@ a tabela de posições original; `--memory-budget-mib` bloqueia alocação acima
 orçamento informado. Estimativas não garantem o pico real.
 
 O [exportador GGUF](gguf.md) preserva pesos e BPE nativos, usando arquitetura
-customizada Katsu que requer loader próprio no consumidor.
+customizada Katu que requer loader próprio no consumidor.
 
 ## Verificação e benchmark
 
 ```sh
-cargo test -p katsu-core --release --locked
-cargo clippy -p katsu-core --all-targets --locked -- -D warnings
+cargo test -p katu-core --release --locked
+cargo clippy -p katu-core --all-targets --locked -- -D warnings
 cargo fmt --all -- --check
-cargo run --release -p katsu-core --example bench_matmul -- 256
+cargo run --release -p katu-core --example bench_matmul -- 256
 ```
 
 O benchmark compara a referência escalar, SIMD sem threads e SIMD com Rayon.

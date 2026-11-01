@@ -1,8 +1,8 @@
 # Referência da API Rust
 
-[Índice](README.md) · [Tensor](../crates/katsu-core/src/tensor.rs) · [Conv2D](../crates/katsu-core/src/conv2d.rs)
+[Índice](README.md) · [Tensor](../crates/katu-core/src/tensor.rs) · [Conv2D](../crates/katu-core/src/conv2d.rs)
 
-Importação pública: `use katsu_core::{Tensor, TensorError, Op, Conv2D};`.
+Importação pública: `use katu_core::{Tensor, TensorError, Op, Conv2D};`.
 Nas tabelas, `Result<T>` abrevia `std::result::Result<T, TensorError>`;
 não há alias Result exportado pelo crate. `&self` foi omitido onde indicado.
 
@@ -124,7 +124,7 @@ As verificações de shape não proíbem NaN/Inf; verifique a estabilidade numé
 ## Rustdoc
 
 ```sh
-cargo doc -p katsu-core --no-deps --open
+cargo doc -p katu-core --no-deps --open
 ```
 
 O [guia de testes](testing.md) também mostra como gerar rustdoc sem resolver o workspace.
@@ -138,6 +138,6 @@ O [guia de testes](testing.md) também mostra como gerar rustdoc sem resolver o 
 - `grad()` devolve `RwLockReadGuard<Option<Vec<f32>>>`; Tensor é Send/Sync.
 - `Backend`, `CpuBackend`, `GpuBackend`: GPU retorna `BackendUnavailable`; `LockPoisoned` identifica falha na publicação.
 - `BpeTokenizer::train/encode/decode/save/load`: BPE de bytes; decode retorna erro em UTF-8 incompleto.
-- `KatsuLmConfig::native_139m/native_349m`, `forward_batch`, `loss_batch_with_backend`.
+- `KatuLmConfig::native_139m/native_349m`, `forward_batch`, `loss_batch_with_backend`.
 
 Veja [Escala](scaling.md) para formatos, memória e limitações.

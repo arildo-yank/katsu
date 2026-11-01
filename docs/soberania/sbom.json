@@ -5,7 +5,7 @@
   "metadata": {
     "component": {
       "type": "application",
-      "name": "katsu",
+      "name": "katu",
       "licenses": [
         {
           "license": {
@@ -34,8 +34,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-server"
         }
       ]
     },
@@ -57,8 +57,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-server"
         }
       ]
     },
@@ -80,8 +80,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-server"
         }
       ]
     },
@@ -103,8 +103,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-server"
         }
       ]
     },
@@ -126,8 +126,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-core,katsu-python,katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-core,katu-python,katu-server"
         }
       ]
     },
@@ -149,8 +149,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-core,katsu-python,katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-core,katu-python,katu-server"
         }
       ]
     },
@@ -172,8 +172,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-core,katsu-python,katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-core,katu-python,katu-server"
         }
       ]
     },
@@ -195,8 +195,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-core,katsu-python,katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-core,katu-python,katu-server"
         }
       ]
     },
@@ -218,8 +218,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-core,katsu-python,katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-core,katu-python,katu-server"
         }
       ]
     },
@@ -241,8 +241,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-core,katsu-python,katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-core,katu-python,katu-server"
         }
       ]
     },
@@ -264,8 +264,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-server"
         }
       ]
     },
@@ -287,8 +287,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-server"
         }
       ]
     },
@@ -310,8 +310,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-server"
         }
       ]
     },
@@ -333,8 +333,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-server"
         }
       ]
     },
@@ -356,8 +356,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-server"
         }
       ]
     },
@@ -379,8 +379,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-python"
+          "name": "katu:used-by",
+          "value": "katu-python"
         }
       ]
     },
@@ -402,8 +402,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-server"
         }
       ]
     },
@@ -425,8 +425,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-server"
         }
       ]
     },
@@ -448,8 +448,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-server"
         }
       ]
     },
@@ -471,8 +471,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-server"
         }
       ]
     },
@@ -494,8 +494,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-server"
         }
       ]
     },
@@ -517,8 +517,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-server"
         }
       ]
     },
@@ -540,8 +540,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-server"
         }
       ]
     },
@@ -563,8 +563,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-rag,katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-rag,katu-server"
         }
       ]
     },
@@ -586,8 +586,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-python,katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-python,katu-server"
         }
       ]
     },
@@ -609,8 +609,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-core,katsu-python,katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-core,katu-python,katu-server"
         }
       ]
     },
@@ -632,8 +632,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-server"
         }
       ]
     },
@@ -655,8 +655,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-server"
         }
       ]
     },
@@ -678,8 +678,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-rag,katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-rag,katu-server"
         }
       ]
     },
@@ -701,8 +701,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-server"
         }
       ]
     },
@@ -724,8 +724,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-server"
         }
       ]
     },
@@ -747,8 +747,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-python,katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-python,katu-server"
         }
       ]
     },
@@ -770,8 +770,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-server"
         }
       ]
     },
@@ -793,8 +793,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-server"
         }
       ]
     },
@@ -816,8 +816,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-python"
+          "name": "katu:used-by",
+          "value": "katu-python"
         }
       ]
     },
@@ -839,8 +839,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-python,katsu-rag,katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-python,katu-rag,katu-server"
         }
       ]
     },
@@ -862,8 +862,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-python"
+          "name": "katu:used-by",
+          "value": "katu-python"
         }
       ]
     },
@@ -885,8 +885,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-python"
+          "name": "katu:used-by",
+          "value": "katu-python"
         }
       ]
     },
@@ -908,8 +908,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-python"
+          "name": "katu:used-by",
+          "value": "katu-python"
         }
       ]
     },
@@ -931,8 +931,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-python"
+          "name": "katu:used-by",
+          "value": "katu-python"
         }
       ]
     },
@@ -954,8 +954,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-python,katsu-rag,katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-python,katu-rag,katu-server"
         }
       ]
     },
@@ -977,8 +977,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-core,katsu-python,katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-core,katu-python,katu-server"
         }
       ]
     },
@@ -1000,8 +1000,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-core,katsu-python,katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-core,katu-python,katu-server"
         }
       ]
     },
@@ -1023,8 +1023,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-server"
         }
       ]
     },
@@ -1046,8 +1046,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-rag,katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-rag,katu-server"
         }
       ]
     },
@@ -1069,8 +1069,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-rag,katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-rag,katu-server"
         }
       ]
     },
@@ -1092,8 +1092,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-rag,katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-rag,katu-server"
         }
       ]
     },
@@ -1115,8 +1115,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-rag,katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-rag,katu-server"
         }
       ]
     },
@@ -1138,8 +1138,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-server"
         }
       ]
     },
@@ -1161,8 +1161,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-server"
         }
       ]
     },
@@ -1184,8 +1184,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-server"
         }
       ]
     },
@@ -1207,8 +1207,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-server"
         }
       ]
     },
@@ -1230,8 +1230,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-server"
         }
       ]
     },
@@ -1253,8 +1253,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-server"
         }
       ]
     },
@@ -1276,8 +1276,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-python"
+          "name": "katu:used-by",
+          "value": "katu-python"
         }
       ]
     },
@@ -1299,8 +1299,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-rag,katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-rag,katu-server"
         }
       ]
     },
@@ -1322,8 +1322,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-server"
         }
       ]
     },
@@ -1345,8 +1345,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-server"
         }
       ]
     },
@@ -1368,8 +1368,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-server"
         }
       ]
     },
@@ -1391,8 +1391,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-server"
         }
       ]
     },
@@ -1414,8 +1414,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-server"
         }
       ]
     },
@@ -1437,8 +1437,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-server"
         }
       ]
     },
@@ -1460,8 +1460,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-server"
         }
       ]
     },
@@ -1483,8 +1483,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-server"
         }
       ]
     },
@@ -1506,8 +1506,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-python,katsu-rag,katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-python,katu-rag,katu-server"
         }
       ]
     },
@@ -1529,8 +1529,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-server"
         }
       ]
     },
@@ -1552,8 +1552,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-core,katsu-python,katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-core,katu-python,katu-server"
         }
       ]
     },
@@ -1575,8 +1575,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-server"
         }
       ]
     },
@@ -1598,8 +1598,8 @@
       ],
       "properties": [
         {
-          "name": "katsu:used-by",
-          "value": "katsu-rag,katsu-server"
+          "name": "katu:used-by",
+          "value": "katu-rag,katu-server"
         }
       ]
     }

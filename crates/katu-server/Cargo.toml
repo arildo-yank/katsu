@@ -1,0 +1,17 @@
+[package]
+name = "katu-server"
+default-run = "katu-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+katu-core.workspace = true
+katu-math.workspace = true
+katu-rag.workspace = true
+axum = "=0.8.6"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "sync"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[features]
+cuda = ["katu-core/cuda"]

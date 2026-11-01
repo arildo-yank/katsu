@@ -1,10 +1,10 @@
 # V2: BF16, memória e smoke test no Mac (28/10/2026)
 
 Medidas feitas num MacBook (Apple M3, 8 GB de RAM, 8 núcleos), sem GPU. Os números de tempo
-no Mac são ruidosos: o sistema já usava a memória quase toda (servidor Katsu, API e navegador
+no Mac são ruidosos: o sistema já usava a memória quase toda (servidor Katu, API e navegador
 abertos), e os passos variaram até 2× entre execuções iguais.
 
-## 1. Precisão mista BF16 (`katsu-core`)
+## 1. Precisão mista BF16 (`katu-core`)
 
 O que existe:
 
@@ -25,7 +25,7 @@ O que **não** existe:
 
 ### Paridade no 134M
 
-Teste: `cargo run --release -p katsu-core --example v2_step -- {fp32|bf16} 768 12 12 32004 256 1 8`
+Teste: `cargo run --release -p katu-core --example v2_step -- {fp32|bf16} 768 12 12 32004 256 1 8`
 (134.373.888 parâmetros, contexto 256, batch 1, 8 passos de Adam com lr 5e-4, sempre o mesmo
 lote, mesma inicialização). Cada precisão rodou duas vezes, em processos separados.
 
@@ -60,7 +60,7 @@ testam no Mac:
 - `Adam8bit`: momentos em 8 bits por blocos de 256, com uma escala FP32 por bloco e compansão
   por raiz quadrada (mais resolução perto de zero). Estado: **2,03 bytes/parâmetro** (medido
   com `state_bytes()`), contra 8 do Adam FP32. A conta do passo é FP32.
-- `KatsuLmConfig::loss_backward_recompute`: guarda só a entrada de cada camada; o backward
+- `KatuLmConfig::loss_backward_recompute`: guarda só a entrada de cada camada; o backward
   refaz uma camada por vez. Custa um forward a mais.
 
 O Adam na RAM do host não entrou: na CPU não muda nada (já é tudo host) e, sem GPU, não há
@@ -72,7 +72,7 @@ FP32 em 25 passos, e os dois caem mais de 30%.
 
 ### Medida no Mac (batch 4 × 256, FP32, Accelerate, 4 passos)
 
-`KATSU_OPTIM={adam|adam8} KATSU_RECOMPUTE={0|1} v2_step fp32 D CAMADAS CABEÇAS 32004 256 4 4`
+`KATU_OPTIM={adam|adam8} KATU_RECOMPUTE={0|1} v2_step fp32 D CAMADAS CABEÇAS 32004 256 4 4`
 
 | Modelo | Otimizador | Recomputação | Pico do processo | Pico / parâmetro | s/passo |
 |---|---|---|---|---|---|
@@ -114,7 +114,7 @@ T × T por cabeça). **Estimativa:** cabe com batch pequeno. Só uma medida na G
 ## 3. Smoke test do 1B no Mac
 
 `sysctl hw.memsize` = 8.589.934.592 (8 GB). Antes do teste o swap já tinha 4,4 GB em uso, com
-o servidor Katsu (8792) e a API (8766) no ar. O 1B precisa de ~10,4 GB só de estado no melhor
+o servidor Katu (8792) e a API (8766) no ar. O 1B precisa de ~10,4 GB só de estado no melhor
 arranjo medido (seção 2): **não cabe neste Mac**, e tentar empurraria o sistema para o swap
 num disco do sistema quase cheio. O 1B não foi rodado.
 
@@ -122,7 +122,7 @@ Rodou, no lugar, a **largura real do 1B** (d = 2048, 16 cabeças, vocabulário 3
 camadas, BF16 misto + Adam 8 bits + recomputação, contexto 128, batch 1, 6 passos, sempre o
 mesmo lote:
 
-`KATSU_OPTIM=adam8 KATSU_RECOMPUTE=1 v2_step bf16 2048 {1|2} 16 32000 128 1 6`
+`KATU_OPTIM=adam8 KATU_RECOMPUTE=1 v2_step bf16 2048 {1|2} 16 32000 128 1 6`
 
 | Camadas | Parâmetros | Pico do processo | s/passo (passos 2–6) | Perda: passo 1 → 6 |
 |---|---|---|---|---|
@@ -152,9 +152,9 @@ As opções ficam em `GpuTrainOptions`, todas desligadas por padrão (o treino a
 
 | Peça | Opção / variável | O que faz na GPU |
 |---|---|---|
-| BF16 | `GemmKernel::Bf16` / `KATSU_GEMM=bf16` | GEMM em Tensor Cores (WMMA m16n16k16, `cuda/train_bf16.cu`), entradas FP32 convertidas para BF16 na carga, acumulação FP32. A mistura é a do `Bf16Backend` da CPU: o produto de ativação e de gradiente de ativação volta a BF16, o gradiente de peso fica FP32. Precisa de sm_80+. |
-| Adam de 8 bits | `adam8: true` / `KATSU_OPTIM=adam8` | Kernel `adam8` em `cuda/train.cu`: um bloco de 256 threads por bloco de quantização, a mesma conta e o mesmo formato do `Adam8bit` (`adam8.rs`), com os blocos sobre a arena da GPU. Estado 2 bytes + 8 bytes por bloco de 256. O checkpoint sai dequantizado em FP32 (formato do `Adam`) e volta quantizado. |
-| Recomputação | `recompute: true` / `KATSU_RECOMPUTE=1` | Guarda só a entrada de cada camada; as demais ativações (QKV, atenção T×T, MLP, LayerNorms) existem para uma camada só. O backward refaz o forward de cada camada antes do backward dela. |
+| BF16 | `GemmKernel::Bf16` / `KATU_GEMM=bf16` | GEMM em Tensor Cores (WMMA m16n16k16, `cuda/train_bf16.cu`), entradas FP32 convertidas para BF16 na carga, acumulação FP32. A mistura é a do `Bf16Backend` da CPU: o produto de ativação e de gradiente de ativação volta a BF16, o gradiente de peso fica FP32. Precisa de sm_80+. |
+| Adam de 8 bits | `adam8: true` / `KATU_OPTIM=adam8` | Kernel `adam8` em `cuda/train.cu`: um bloco de 256 threads por bloco de quantização, a mesma conta e o mesmo formato do `Adam8bit` (`adam8.rs`), com os blocos sobre a arena da GPU. Estado 2 bytes + 8 bytes por bloco de 256. O checkpoint sai dequantizado em FP32 (formato do `Adam`) e volta quantizado. |
+| Recomputação | `recompute: true` / `KATU_RECOMPUTE=1` | Guarda só a entrada de cada camada; as demais ativações (QKV, atenção T×T, MLP, LayerNorms) existem para uma camada só. O backward refaz o forward de cada camada antes do backward dela. |
 
 O que **não** mudou: os buffers continuam FP32. O BF16 aqui muda a conta (e talvez a velocidade
 nos Tensor Cores), **não a memória**; a economia de memória vem do Adam de 8 bits e da
@@ -175,7 +175,7 @@ fundida e leitura de vários shards continuam pendentes.
 | `v2_options_together_track_fp32_cpu_loss` | treino FP32 da CPU com Adam FP32, 8 passos | perda a **1% em cada passo** (o critério do 134M no Mac) |
 
 As tolerâncias do BF16 são palpites a confirmar no pod; se um teste falhar, o número que sai em
-`parity.txt` (com `KATSU_PARITY_VERBOSE`) diz se é tolerância apertada ou kernel errado.
+`parity.txt` (com `KATU_PARITY_VERBOSE`) diz se é tolerância apertada ou kernel errado.
 
 ### Estimativa de memória do 1B no pod (não medida)
 

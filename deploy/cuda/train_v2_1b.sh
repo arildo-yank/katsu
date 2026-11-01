@@ -7,7 +7,7 @@
 # Em duas etapas, para não pagar dois dias antes de ver uma hora:
 #   GATE_HOURS=1 ./deploy/cuda/train_v2_1b.sh
 #       roda a paridade, treina 1 h, grava latest.ckpt e sai com erro de propósito (teto de tempo).
-#   KATSU_RESUME=$RUNS/<run>/latest.ckpt GATE_HOURS=60 OUTPUT=$RUNS/<run>-2 ./deploy/cuda/train_v2_1b.sh
+#   KATU_RESUME=$RUNS/<run>/latest.ckpt GATE_HOURS=60 OUTPUT=$RUNS/<run>-2 ./deploy/cuda/train_v2_1b.sh
 #       continua do mesmo passo até o fim.
 #
 # Antes, suba para o pod (rsync --partial), dentro desta pasta:
@@ -67,18 +67,18 @@ echo "pré-treino: $adapt passos × $BATCH × 256 = $(( adapt * BATCH * 256 )) t
 echo "SFT: $steps passos ($SFT_EPOCHS épocas de $train, lr $SFT_LR) -> $OUTPUT"
 
 # A paridade roda só na primeira etapa: se falhar, nada de treino pago.
-if [[ -z ${KATSU_RESUME:-} ]]; then
+if [[ -z ${KATU_RESUME:-} ]]; then
   mkdir -p "$RUNS/parity"
   {
-    cargo test --release --locked -p katsu-core --features cuda --lib gpu_train -- --nocapture
-    cargo test --release --locked -p katsu-core --features cuda --test gpu_train -- --nocapture --test-threads=1
+    cargo test --release --locked -p katu-core --features cuda --lib gpu_train -- --nocapture
+    cargo test --release --locked -p katu-core --features cuda --test gpu_train -- --nocapture --test-threads=1
   } 2>&1 | tee "$RUNS/parity/parity.txt"
   if grep -q "sem GPU" "$RUNS/parity/parity.txt"; then
     echo 'Testes pulados: a GPU não foi vista.' >&2
     exit 1
   fi
 fi
-cargo build --release --locked -p katsu-server --features cuda --bin train_sft
+cargo build --release --locked -p katu-server --features cuda --bin train_sft
 
 BASE="$RUNS/v2-1b-base"
 mkdir -p "$BASE"
@@ -94,16 +94,16 @@ shutil.copyfile(src, base / "tokenizer.bpe")
 (base / "config.json").write_text(json.dumps(dict(vocab_size=vocab, block_size=256, embed_dim=2048, layers=18, heads=16)))
 PY
 
-export KATSU_ENGINE=gpu KATSU_GEMM="$GEMM" KATSU_BACKEND=cuda KATSU_BATCH="$BATCH" KATSU_INIT_RANDOM=1
-export KATSU_EVAL_SAMPLES="$EVAL_SAMPLES" KATSU_CHECKPOINT_EVERY="$CHECKPOINT_EVERY"
-export KATSU_CORPUS_LR="$CORPUS_LR" KATSU_CORPUS_EVAL="$VAL" KATSU_CORPUS_EVAL_WINDOWS="$EVAL_WINDOWS"
+export KATU_ENGINE=gpu KATU_GEMM="$GEMM" KATU_BACKEND=cuda KATU_BATCH="$BATCH" KATU_INIT_RANDOM=1
+export KATU_EVAL_SAMPLES="$EVAL_SAMPLES" KATU_CHECKPOINT_EVERY="$CHECKPOINT_EVERY"
+export KATU_CORPUS_LR="$CORPUS_LR" KATU_CORPUS_EVAL="$VAL" KATU_CORPUS_EVAL_WINDOWS="$EVAL_WINDOWS"
 # A conta de orçamento do train_sft vale para host + GPU (pede 49.560 MiB neste modelo); como no probe, não limita aqui.
-export KATSU_DEADLINE_SECONDS=${GATE_SECONDS:-$(( GATE_HOURS * 3600 ))} KATSU_MEMORY_BUDGET_MIB=${MEMORY_BUDGET_MIB:-999999}
+export KATU_DEADLINE_SECONDS=${GATE_SECONDS:-$(( GATE_HOURS * 3600 ))} KATU_MEMORY_BUDGET_MIB=${MEMORY_BUDGET_MIB:-999999}
 status=0
 timeout --signal=INT "${MAX_HOURS}h" target/release/train_sft \
   "$BASE" "$DATA.train.jsonl" "$DATA.eval.jsonl" "$CORPUS" "$OUTPUT" "$steps" "$adapt" "$SFT_LR" || status=$?
 if [[ $status != 0 ]]; then
-  echo "parou (status $status): se foi o teto de tempo, retome com KATSU_RESUME=$OUTPUT/latest.ckpt e um OUTPUT novo" >&2
+  echo "parou (status $status): se foi o teto de tempo, retome com KATU_RESUME=$OUTPUT/latest.ckpt e um OUTPUT novo" >&2
   exit $status
 fi
 (cd "$OUTPUT" && sha256sum model.ckpt pretrain-final.ckpt tokenizer.bpe config.json metrics.jsonl corpus-eval.jsonl sft-report.json > SHA256SUMS)

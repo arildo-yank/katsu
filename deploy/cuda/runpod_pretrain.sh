@@ -9,11 +9,11 @@
 #   data/pretrain/{train.bin,val.bin,SHA256SUMS}      (scripts/build_pretrain_corpus.py + tokenize_corpus)
 #   data/sft/distill_arandu_50k.train.jsonl e .eval.jsonl
 #   runs/hostinger-sft-134m-20261025/{config.json,tokenizer.bpe}   (só a arquitetura e o tokenizador:
-#   os pesos começam aleatórios, KATSU_INIT_RANDOM=1)
+#   os pesos começam aleatórios, KATU_INIT_RANDOM=1)
 #
 # Teto de custo: PRETRAIN_HOURS para a fase de corpus pelo relógio do processo
-# (KATSU_DEADLINE_SECONDS). Ao estourar, grava latest.ckpt e sai com erro, sem SFT; retome com
-# KATSU_RESUME=<run>/latest.ckpt e um OUTPUT novo. MAX_HOURS é o corte duro do processo inteiro.
+# (KATU_DEADLINE_SECONDS). Ao estourar, grava latest.ckpt e sai com erro, sem SFT; retome com
+# KATU_RESUME=<run>/latest.ckpt e um OUTPUT novo. MAX_HOURS é o corte duro do processo inteiro.
 # A loss do corpus de validação (janelas fixas) vai para <run>/corpus-eval.jsonl a cada checkpoint.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -57,16 +57,16 @@ steps=$(( (SFT_EPOCHS * train + BATCH - 1) / BATCH ))
 echo "pré-treino: $adapt passos × $BATCH × 256 = $(( adapt * BATCH * 256 )) tokens de $available (lr $CORPUS_LR, teto ${PRETRAIN_HOURS} h)"
 echo "SFT: $steps passos ($SFT_EPOCHS épocas de $train, lr $SFT_LR) -> $OUTPUT"
 
-cargo build --release --locked -p katsu-server --features cuda --bin train_sft
-export KATSU_ENGINE=gpu KATSU_GEMM="$GEMM" KATSU_BACKEND=cuda KATSU_BATCH="$BATCH" KATSU_INIT_RANDOM=1
-export KATSU_EVAL_SAMPLES="$EVAL_SAMPLES" KATSU_CHECKPOINT_EVERY="$CHECKPOINT_EVERY"
-export KATSU_CORPUS_LR="$CORPUS_LR" KATSU_CORPUS_EVAL="$CORPUS/val.bin" KATSU_CORPUS_EVAL_WINDOWS="$EVAL_WINDOWS"
-export KATSU_DEADLINE_SECONDS=$(( PRETRAIN_HOURS * 3600 )) KATSU_MEMORY_BUDGET_MIB=${MEMORY_BUDGET_MIB:-16384}
+cargo build --release --locked -p katu-server --features cuda --bin train_sft
+export KATU_ENGINE=gpu KATU_GEMM="$GEMM" KATU_BACKEND=cuda KATU_BATCH="$BATCH" KATU_INIT_RANDOM=1
+export KATU_EVAL_SAMPLES="$EVAL_SAMPLES" KATU_CHECKPOINT_EVERY="$CHECKPOINT_EVERY"
+export KATU_CORPUS_LR="$CORPUS_LR" KATU_CORPUS_EVAL="$CORPUS/val.bin" KATU_CORPUS_EVAL_WINDOWS="$EVAL_WINDOWS"
+export KATU_DEADLINE_SECONDS=$(( PRETRAIN_HOURS * 3600 )) KATU_MEMORY_BUDGET_MIB=${MEMORY_BUDGET_MIB:-16384}
 status=0
 timeout --signal=INT "${MAX_HOURS}h" target/release/train_sft \
   "$BASE" "$DATA.train.jsonl" "$DATA.eval.jsonl" "$CORPUS/train.bin" "$OUTPUT" "$steps" "$adapt" "$SFT_LR" || status=$?
 if [[ $status != 0 ]]; then
-  echo "parou (status $status): se foi o teto de tempo, retome com KATSU_RESUME=$OUTPUT/latest.ckpt e um OUTPUT novo" >&2
+  echo "parou (status $status): se foi o teto de tempo, retome com KATU_RESUME=$OUTPUT/latest.ckpt e um OUTPUT novo" >&2
   exit $status
 fi
 (cd "$OUTPUT" && sha256sum model.ckpt pretrain-final.ckpt tokenizer.bpe config.json metrics.jsonl corpus-eval.jsonl sft-report.json > SHA256SUMS)

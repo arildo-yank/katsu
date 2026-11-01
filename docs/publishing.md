@@ -21,7 +21,7 @@ URL de um repositório. Não inclua essa captura entre os arquivos do projeto.
 - [ ] Aguardar o workflow; só então adicionar badge ligado à URL real do CI.
 - [ ] Trocar a URL pendente nos [textos de lançamento](launch.md) pela URL pública verificada.
 - [ ] Manter o título como prévia de core Rust, sem promessas não testadas.
-- [ ] Não anunciar `pip install katsu`, Grad-CAM, treino ou benchmarks ainda inexistentes.
+- [ ] Não anunciar `pip install katu`, Grad-CAM, treino ou benchmarks ainda inexistentes.
 
 ## Antes de uma release de pacotes
 

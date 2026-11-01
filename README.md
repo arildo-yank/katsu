@@ -1,12 +1,16 @@
-<p align="center"><img src="docs/assets/katsu-banner.svg" alt="Katsu — núcleo Rust para tensores, autograd e visão computacional" width="100%"></p>
+<p align="center"><img src="docs/assets/katu-banner.svg" alt="Katu — núcleo Rust para tensores, autograd e visão computacional" width="100%"></p>
 
-# Katsu
+# Katu
 
 **Um núcleo de deep learning em Rust, construído para inspecionar operações e gradientes.**
 
+> Até 01/11/2026 o projeto se chamava **Katsu**. O nome mudou para **Katu**, do tupi ("bom"), porque
+> `katsu` já era um pacote de outra pessoa no PyPI. Os arquivos de checkpoint e de tokenizador mantêm as
+> assinaturas antigas (`KATSUCK1`, `KATSUBP1`, `KATSUBP2`), para que todo modelo já treinado continue abrindo.
+
 [English](README.en.md) · [Começar](docs/getting-started.md) · [API](docs/api.md) · [Arquitetura](docs/architecture.md) · [Contribuir](CONTRIBUTING.md)
 
-Katsu combina tensores CPU `f32`, diferenciação automática reversa e Conv2D em um
+Katu combina tensores CPU `f32`, diferenciação automática reversa e Conv2D em um
 core com Rayon para paralelismo CPU. A explicabilidade é uma direção do projeto:
 ativações e gradientes já estão disponíveis; Grad-CAM ainda está no roadmap.
 
@@ -19,17 +23,17 @@ ativações e gradientes já estão disponíveis; Grad-CAM ainda está no roadma
 Na raiz de uma cópia local do projeto, com Rust e Cargo no PATH:
 
 ```sh
-cargo test -p katsu-core
-cargo run -p katsu-core --example autograd
-cargo run -p katsu-core --release --example conv2d
-cargo run -p katsu-core --example train
+cargo test -p katu-core
+cargo run -p katu-core --example autograd
+cargo run -p katu-core --release --example conv2d
+cargo run -p katu-core --example train
 ```
 
 Cargo pode precisar de rede para resolver PyO3, mesmo selecionando apenas o core,
 porque ele pertence ao mesmo workspace. Veja a [alternativa offline](docs/testing.md).
 
 ```rust
-use katsu_core::{Tensor, TensorError};
+use katu_core::{Tensor, TensorError};
 
 fn main() -> Result<(), TensorError> {
     let a = Tensor::new(vec![1., 2.], &[2])?;
@@ -44,7 +48,7 @@ fn main() -> Result<(), TensorError> {
 ```
 
 Esse exemplo calcula uma perda e suas derivadas; não atualiza parâmetros.
-O [arquivo executável](crates/katsu-core/examples/autograd.rs) também imprime `dL/db`.
+O [arquivo executável](crates/katu-core/examples/autograd.rs) também imprime `dL/db`.
 
 ## O que existe hoje
 
@@ -55,8 +59,8 @@ O [arquivo executável](crates/katsu-core/examples/autograd.rs) também imprime 
 | Autograd | Grafo dinâmico, VJP, acumulação, `zero_grad`, `retain_grad` | `requires_grad`, detach, derivadas superiores |
 | Visão | Conv2D NCHW, stride, padding, dX e dW | Bias, groups, dilation, pooling |
 | Explicabilidade | Acesso às ativações e seus gradientes | Grad-CAM e heatmaps |
-| Python | Estrutura PyO3/Maturin; módulo de versão | `katsu.Tensor`, wheels publicados |
-| Linguagem | Katsu LM v1 e pipeline Rust BPE/batches ([guia](docs/katsu-lm.md), [corpus](docs/corpus.md)) | Treino grande e backend CUDA |
+| Python | Estrutura PyO3/Maturin; módulo de versão | `katu.Tensor`, wheels publicados |
+| Linguagem | Katu LM v1 e pipeline Rust BPE/batches ([guia](docs/katu-lm.md), [corpus](docs/corpus.md)) | Treino grande e backend CUDA |
 | Treinamento | SGD, Adam, mini-batches, loop `fit`, métricas JSON por época ([guia](docs/training.md)) | Agendamento de lr, gradient clipping |
 | Execução | CPU, Rayon, NEON/AVX2, Tensor Send/Sync | GPU, backend HTTP |
 
@@ -64,7 +68,7 @@ O [arquivo executável](crates/katsu-core/examples/autograd.rs) também imprime 
 
 ![Conv2D: entrada NCHW, filtros OIHW, saída e derivadas](docs/assets/conv2d.svg)
 
-O [exemplo RGB 224×224](crates/katsu-core/examples/conv2d/main.rs) usa oito filtros
+O [exemplo RGB 224×224](crates/katu-core/examples/conv2d/main.rs) usa oito filtros
 3×3, stride 1 e padding 1. A saída é `[1, 8, 224, 224]`. A camada registra
 entrada e pesos como pais; `loss.backward()` acumula ambos os gradientes.
 
@@ -73,7 +77,7 @@ entrada e pesos como pais; `loss.backward()` acumula ambos os gradientes.
 
 ## Um core, um grafo
 
-![Arquitetura do Katsu: core disponível, Python inicial e módulos planejados](docs/assets/architecture.svg)
+![Arquitetura do Katu: core disponível, Python inicial e módulos planejados](docs/assets/architecture.svg)
 
 O core usa `Arc` para compartilhar nós e `RwLock` para os gradientes.
 Dados e arestas são imutáveis. `clone()` compartilha o mesmo nó; Tensor é `Send`/`Sync`. Leia a [arquitetura e os limites](docs/architecture.md).
@@ -85,7 +89,7 @@ Dados e arestas são imutáveis. `clone()` compartilha o mesmo nó; Tensor é `S
 | [Começar](docs/getting-started.md) | Ambiente, comandos, integração Rust e Python experimental |
 | [Referência da API](docs/api.md) | Tensor, Conv2D, Op e todos os erros públicos |
 | [Autograd](docs/autograd.md) | Matemática, ordem topológica, VJP e acumulação |
-| [Katsu LM](docs/katsu-lm.md) | Primeiro modelo de linguagem do Katsu: treino, geração e checkpoint |
+| [Katu LM](docs/katu-lm.md) | Primeiro modelo de linguagem do Katu: treino, geração e checkpoint |
 | [Treinamento](docs/training.md) | SGD, loop `fit` e contrato JSON com o monitor arandu |
 | [Conv2D](docs/conv2d.md) | Layout, derivadas, cache e caminho para Grad-CAM |
 | [Testes e validação](docs/testing.md) | Evidências, reprodução offline, CI e limitações |
@@ -95,7 +99,7 @@ Dados e arestas são imutáveis. `clone()` compartilha o mesmo nó; Tensor é `S
 
 ## Escopo de produção
 
-Katsu é uma biblioteca, não um serviço. Por isso não se aplicam: interface web,
+Katu é uma biblioteca, não um serviço. Por isso não se aplicam: interface web,
 banco de dados, autenticação, deploy com proxy/HTTPS, rate limiting, cache/CDN,
 backup e endpoint de métricas. Se um backend HTTP for criado (roadmap), essas
 camadas passam a valer. O que se aplica: testes automatizados, CI, hook local

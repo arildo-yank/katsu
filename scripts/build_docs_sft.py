@@ -5,13 +5,13 @@
 A medida no "HD do cliente" (ARANDU agi/README.md) mostrou que o modelo quase não responde sozinho em
 documentos: livros técnicos em inglês e trechos de tabela falham. Aqui:
 - as perguntas de data/sft/qa_docs_train.jsonl (ARANDU scripts/distill_reading_qa.py --docs: trechos
-  de documentos públicos em PT e EN, cortados como o Katsu corta), no formato de leitura, com a
+  de documentos públicos em PT e EN, cortados como o Katu corta), no formato de leitura, com a
   resposta no idioma do trecho;
 - um caso sem resposta para cada quatro (a pergunta com um trecho de outro documento, mesmo idioma);
 - para não perder o que a v1.2.0 tem: 1.500 de dado pessoal, 1.500 dos outros tipos de contexto,
   2.500 de leitura variada e 1.000 de leitura e cálculo.
 Os 5% de validação saem por trecho (nenhum trecho da validação aparece no treino). Exemplos acima do
-contexto (256 tokens) saem, contados com o tokenizer do Katsu.
+contexto (256 tokens) saem, contados com o tokenizer do Katu.
 """
 import argparse
 import hashlib
@@ -56,8 +56,8 @@ def main(argv=None):
             rows.append(row(i, "docs_ausente", READING_SYSTEM, f"Trecho: {other}\nPergunta: {x['question']}",
                             r.choice(NO_DATA)) | {"passage": other})
     sys.path.insert(0, str(KATSU.parent / "ARANDU/scripts"))
-    from katsu_bpe import KatsuBpe
-    tok = KatsuBpe.load(TOKENIZER)
+    from katu_bpe import KatuBpe
+    tok = KatuBpe.load(TOKENIZER)
     before = len(rows)
     rows = [x for x in rows if fits(tok, x)]
     too_long = before - len(rows)

@@ -4,7 +4,7 @@
 # rodando no pod, o hardware. Aponta o active-run.json para o espelho uma vez, no início; depois a
 # escolha do run no painel é sua.
 #
-#   scripts/mirror_pod_run.sh root@IP PORTA /root/katsu-gpu-v2/runs/gpu-sft-134m-... gpu-sft-4090
+#   scripts/mirror_pod_run.sh root@IP PORTA /root/katu-gpu-v2/runs/gpu-sft-134m-... gpu-sft-4090
 #
 # Para quando o run tiver sft-report.json (fim) ou com Ctrl-C.
 set -euo pipefail

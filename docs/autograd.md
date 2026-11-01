@@ -52,7 +52,7 @@ apenas a; não limpa b ou o restante do grafo.
 Um guard vivo bloqueia a publicação de um novo gradiente nesse nó:
 
 ```rust
-use katsu_core::{Tensor, TensorError};
+use katu_core::{Tensor, TensorError};
 
 fn main() -> Result<(), TensorError> {
     let x = Tensor::new(vec![2., 3.], &[2])?;

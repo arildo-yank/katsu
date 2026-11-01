@@ -2,13 +2,13 @@
 # V2 na GPU: primeiro prova a correção dos kernels novos (BF16 nos Tensor Cores, Adam de 8 bits,
 # recomputação de ativações) contra a referência em CPU; só se todos passarem, mede VRAM e
 # tokens/s do 1B (d = 2048, 18 camadas, 16 cabeças, ~1,04B parâmetros), com pesos aleatórios e
-# KATSU_BENCHMARK_ONLY, contexto 256 como a medida FP32 de 28/10/2026 (runpod_1b_probe.sh).
+# KATU_BENCHMARK_ONLY, contexto 256 como a medida FP32 de 28/10/2026 (runpod_1b_probe.sh).
 #
 #   ./deploy/cuda/runpod_v2_probe.sh        (no pod, na raiz do KATSU; mesmos arquivos de dados
 #                                            que o runpod_1b_probe.sh)
 #
 # Saída em $OUT (padrão runs/probe-v2-<data>):
-#   parity.txt     testes de paridade (KATSU_PARITY_VERBOSE: diferença de cada tensor)
+#   parity.txt     testes de paridade (KATU_PARITY_VERBOSE: diferença de cada tensor)
 #   summary.jsonl  uma linha por configuração: s/passo, tokens/s, pico de VRAM, erro
 # Os checkpoints de cada execução são apagados logo após a medida.
 set -uo pipefail
@@ -33,12 +33,12 @@ EVAL=data/corpus-bilingual-arandu-v1/sft/arandu_eval.jsonl
 set -e
 {
   echo "== kernel adam8 contra adam8::apply da CPU (bit a bit)"
-  cargo test --release --locked -p katsu-core --features cuda --lib gpu_train -- --nocapture
+  cargo test --release --locked -p katu-core --features cuda --lib gpu_train -- --nocapture
   echo "== GpuTrainer contra o autograd da CPU (antigos + V2)"
-  KATSU_PARITY_VERBOSE=1 cargo test --release --locked -p katsu-core --features cuda --test gpu_train -- --nocapture --test-threads=1
+  KATU_PARITY_VERBOSE=1 cargo test --release --locked -p katu-core --features cuda --test gpu_train -- --nocapture --test-threads=1
 } 2>&1 | tee "$OUT/parity.txt"
 grep -q "sem GPU" "$OUT/parity.txt" && { echo 'Testes pulados: a GPU não foi vista.' >&2; exit 1; }
-cargo build --release --locked -p katsu-server --features cuda --bin train_sft
+cargo build --release --locked -p katu-server --features cuda --bin train_sft
 set +e
 
 probe() {  # rótulo largura camadas cabeças batch passos, e as opções em variáveis de ambiente
@@ -60,12 +60,12 @@ PY
   fi
   nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -lms 500 > "$run.mem" &
   local sampler=$!
-  KATSU_INIT_RANDOM=1 KATSU_BACKEND=cuda KATSU_ENGINE=gpu KATSU_BENCHMARK_ONLY=1 KATSU_BATCH=$batch \
-    KATSU_CHECKPOINT_EVERY=100000 KATSU_MEMORY_BUDGET_MIB=999999 \
+  KATU_INIT_RANDOM=1 KATU_BACKEND=cuda KATU_ENGINE=gpu KATU_BENCHMARK_ONLY=1 KATU_BATCH=$batch \
+    KATU_CHECKPOINT_EVERY=100000 KATU_MEMORY_BUDGET_MIB=999999 \
     timeout 1200 target/release/train_sft "$base" "$TRAIN" "$EVAL" "$TRAIN" "$run" 0 "$steps" 0.00005 > "$run.log" 2>&1
   local rc=$?
   kill "$sampler" 2>/dev/null; wait "$sampler" 2>/dev/null
-  python3 - "$label" "$batch" "$rc" "$run" "${KATSU_GEMM:-tiled64}" "${KATSU_OPTIM:-adam}" "${KATSU_RECOMPUTE:-0}" >> "$OUT/summary.jsonl" <<'PY'
+  python3 - "$label" "$batch" "$rc" "$run" "${KATU_GEMM:-tiled64}" "${KATU_OPTIM:-adam}" "${KATU_RECOMPUTE:-0}" >> "$OUT/summary.jsonl" <<'PY'
 import json, statistics, sys
 from pathlib import Path
 label, batch, rc, run, gemm, optim, recompute = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), Path(sys.argv[4]), *sys.argv[5:]
@@ -96,11 +96,11 @@ PY
 # Referência no mesmo pod: o motor como estava (FP32, Adam FP32, sem recomputação), batch 8.
 probe fp32 2048 18 16 8 15
 # Cada peça sozinha, batch 8, para separar o efeito de cada uma na memória e no tempo.
-KATSU_GEMM=bf16 probe bf16 2048 18 16 8 15
-KATSU_OPTIM=adam8 probe adam8 2048 18 16 8 15
-KATSU_RECOMPUTE=1 probe recompute 2048 18 16 8 15
+KATU_GEMM=bf16 probe bf16 2048 18 16 8 15
+KATU_OPTIM=adam8 probe adam8 2048 18 16 8 15
+KATU_RECOMPUTE=1 probe recompute 2048 18 16 8 15
 # As três juntas, subindo o batch até não caber.
 for batch in 1 8 16 32 64; do
-  KATSU_GEMM=bf16 KATSU_OPTIM=adam8 KATSU_RECOMPUTE=1 probe v2 2048 18 16 "$batch" 15 || break
+  KATU_GEMM=bf16 KATU_OPTIM=adam8 KATU_RECOMPUTE=1 probe v2 2048 18 16 "$batch" 15 || break
 done
 echo "Resultado: $OUT/summary.jsonl e $OUT/parity.txt"

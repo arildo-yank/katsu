@@ -37,7 +37,7 @@ perda dentro de tolerâncias documentadas. Ter backward não basta para concluir
 
 Crescimento gradual, cada etapa com algo demonstrável:
 
-1. **Katsu fala português** *(em andamento)*: Katsu LM, de caracteres, treinado no Mac com textos
+1. **Katu fala português** *(em andamento)*: Katu LM, de caracteres, treinado no Mac com textos
    brasileiros em domínio público, loss ao vivo no monitor arandu. Feito: modelo,
    geração, checkpoint, v0 (~116 mil parâmetros, 1 livro) e v1 (~481 mil, 4 cabeças,
    22 obras no treino v1). BPE e batches/threads implementados; treino grande ainda pendente.
@@ -79,19 +79,19 @@ Não anunciar causalidade ou explicação exata das decisões.
 Critério: benchmarks reproduzíveis e uma demonstração de inferência com limites
 de recursos definidos. Nenhum ganho competitivo é presumido.
 
-## 5. Katsu Embedding Model (busca por sentido)
+## 5. Katu Embedding Model (busca por sentido)
 
 A busca do RAG é lexical (BM25). Na régua da NR-12 (ARANDU/docs/regua_busca_nr12.json, 26
 perguntas), o trecho certo vem em 1.º em 12 e nos 3 primeiros em 18 (31/10/2026). Um dicionário de
-sinônimos escrito à mão (`katsu-rag/src/synonyms.rs`) levou a 12 e 19, e 1 de 8 na régua do
+sinônimos escrito à mão (`katu-rag/src/synonyms.rs`) levou a 12 e 19, e 1 de 8 na régua do
 consultor, sem ganho: os erros que sobram pedem sentido ("placas avisando dos riscos" casa com outra
 "placa" da norma antes de "sinalização"). Usar um codificador pronto (e5, PyTorch) foi recusado:
 pesos e framework de terceiros.
 
-- [ ] Encoder no Katsu: atenção bidirecional e média dos estados (o motor só tem o GPT causal).
+- [ ] Encoder no Katu: atenção bidirecional e média dos estados (o motor só tem o GPT causal).
 - [ ] Pares pergunta → trecho próprios para treino contrastivo, sem texto de cliente e sem livro comercial.
-- [ ] Treino contrastivo no Katsu (perda InfoNCE com negativos do lote).
-- [ ] Índice de vetores no `katsu-rag`, somado ao BM25 (busca híbrida), com a mesma régua.
+- [ ] Treino contrastivo no Katu (perda InfoNCE com negativos do lote).
+- [ ] Índice de vetores no `katu-rag`, somado ao BM25 (busca híbrida), com a mesma régua.
 - [ ] Régua cega: perguntas escritas por quem não viu o índice nem o treino.
 
 Critério: o trecho certo nos 3 primeiros sobe na régua cega contra o BM25 com sinônimos, sem

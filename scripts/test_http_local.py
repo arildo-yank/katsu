@@ -5,7 +5,7 @@ from urllib.error import HTTPError
 
 class HttpTests(unittest.TestCase):
     def request(self, body=None, path='/generate'):
-        req=Request(os.environ.get('KATSU_URL','http://127.0.0.1:8787')+path, None if body is None else json.dumps(body).encode(),{'Content-Type':'application/json'})
+        req=Request(os.environ.get('KATU_URL','http://127.0.0.1:8787')+path, None if body is None else json.dumps(body).encode(),{'Content-Type':'application/json'})
         with build_opener(ProxyHandler({})).open(req,timeout=60) as r:return json.load(r)
     def test_health(self):
         r=self.request(path='/health');self.assertGreater(r['parameters'],2000000);self.assertEqual(r['backend'],'cpu')

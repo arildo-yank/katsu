@@ -4,7 +4,7 @@
 bash scripts/train_mac_stable.sh
 # O diretório precisa ser novo; alternativa: bash scripts/train_mac_stable.sh runs/novo-treino
 python3 scripts/analyze_stability.py runs/mac-cpu-stable
-RAYON_NUM_THREADS=4 cargo run --release -p katsu-server --locked -- runs/mac-cpu-stable 8787
+RAYON_NUM_THREADS=4 cargo run --release -p katu-server --locked -- runs/mac-cpu-stable 8787
 ```
 
 O servidor usa [Axum](https://docs.rs/axum/0.8.6/axum/), escuta somente em
@@ -44,11 +44,11 @@ para retomada exata. `model.ckpt` é o resultado final. Não houve gradient clip
 ## GGUF
 
 ```sh
-python3 scripts/export_to_gguf.py --run runs/mac-cpu-stable --output runs/mac-cpu-stable/Katsu-stable-F32.gguf
+python3 scripts/export_to_gguf.py --run runs/mac-cpu-stable --output runs/mac-cpu-stable/Katu-stable-F32.gguf
 ```
 
 O exportador existente lê o BPE nativo. Continua sendo GGUF de arquitetura
-customizada `katsu`; **não é um fallback utilizável pelo llama.cpp** sem implementar
+customizada `katu`; **não é um fallback utilizável pelo llama.cpp** sem implementar
 suporte ao modelo/tokenizador. Veja [contrato GGUF](gguf.md). CUDA permanece sem
 execução NVIDIA nesta etapa.
 

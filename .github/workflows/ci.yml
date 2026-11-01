@@ -16,9 +16,9 @@ jobs:
         with:
           components: rustfmt, clippy
       - run: cargo fmt --all -- --check
-      - run: cargo test -p katsu-core --locked
-      - run: cargo clippy -p katsu-core --all-targets -- -D warnings
-      - run: cargo run -p katsu-core --release --example conv2d
-      - run: cargo run -p katsu-core --example train
-      - run: cargo check -p katsu-python --locked
+      - run: cargo test -p katu-core --locked
+      - run: cargo clippy -p katu-core --all-targets -- -D warnings
+      - run: cargo run -p katu-core --release --example conv2d
+      - run: cargo run -p katu-core --example train
+      - run: cargo check -p katu-python --locked
       - run: python3 scripts/soberania/sbom.py --check

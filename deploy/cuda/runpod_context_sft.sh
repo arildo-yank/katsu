@@ -29,12 +29,12 @@ fi
 # shellcheck disable=SC1091
 source "$HOME/.cargo/env"
 export LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64:${LD_LIBRARY_PATH:-}
-cargo build --release --locked -p katsu-server --features cuda --bin train_sft
+cargo build --release --locked -p katu-server --features cuda --bin train_sft
 train=$(grep -c . "data/sft/$DATA.train.jsonl")
 steps=$(( (train + BATCH - 1) / BATCH ))
 echo "SFT: $train exemplos, 1 época, batch $BATCH = $steps passos, lr $LR -> $OUTPUT"
-export KATSU_ENGINE=gpu KATSU_GEMM=tf32 KATSU_BACKEND=cuda KATSU_BATCH="$BATCH" KATSU_EVAL_SAMPLES=1000
-export KATSU_CHECKPOINT_EVERY=100 KATSU_MEMORY_BUDGET_MIB=16384
+export KATU_ENGINE=gpu KATU_GEMM=tf32 KATU_BACKEND=cuda KATU_BATCH="$BATCH" KATU_EVAL_SAMPLES=1000
+export KATU_CHECKPOINT_EVERY=100 KATU_MEMORY_BUDGET_MIB=16384
 target/release/train_sft "$BASE" "data/sft/$DATA.train.jsonl" "data/sft/$DATA.eval.jsonl" \
   "data/sft/$DATA.train.jsonl" "$OUTPUT" "$steps" 0 "$LR"
 (cd "$OUTPUT" && sha256sum model.ckpt config.json tokenizer.bpe sft-report.json metrics.jsonl > SHA256SUMS)

@@ -1,7 +1,7 @@
 # Exportação GGUF nativa
 
 ```sh
-python3 scripts/export_to_gguf.py --run runs/native-smoke-20261024 --output runs/native-smoke-20261024/Katsu-2M-v0.1-F32.gguf
+python3 scripts/export_to_gguf.py --run runs/native-smoke-20261024 --output runs/native-smoke-20261024/Katu-2M-v0.1-F32.gguf
 python3 -m unittest discover -s scripts -p 'test_export_to_gguf.py' -v
 ```
 
@@ -10,11 +10,11 @@ Escreve GGUF v3 F32, alinhamento 32, sem dependência Python externa. Valida
 shapes e merges, rejeita truncamento e não sobrescreve arquivo existente.
 Pesos são copiados byte a byte; dimensões são invertidas para a ordem GGML.
 
-`general.architecture=katsu` e `tokenizer.ggml.model=katsu-bpe` são intencionais:
+`general.architecture=katu` e `tokenizer.ggml.model=katu-bpe` são intencionais:
 este modelo não é compatível automaticamente com llama.cpp/Ollama. O consumidor HTTP
 precisa implementar um loader dessa arquitetura e sua segmentação original.
 O arquivo guarda tokens com mapeamento reversível byte→Unicode, merges em ordem,
-pares de IDs em `tokenizer.katsu.merge_ids` e identificação do pretokenizador
+pares de IDs em `tokenizer.katu.merge_ids` e identificação do pretokenizador
 `unicode-white-space-inclusive-v1`. Não substitua pela regex GPT-2.
 Não há BOS/EOS inseridos automaticamente. Embeddings de entrada/saída são separados;
 a atenção mantém projeções por cabeça, conforme o checkpoint Rust.
@@ -29,4 +29,4 @@ Backend opcional: [cudarc 0.19.9](https://docs.rs/cudarc/0.19.9/cudarc/).
 
 ## Tokenizer BP2
 
-O leitor também aceita KATSUBP2: quatro tokens reservados, anexados após os merges, são preservados em `tokenizer.katsu.special_ids`, `tokenizer.katsu.special_tokens` e `tokenizer.ggml.eos_token_id`. A inserção automática de BOS/EOS continua desativada; o template fornece os marcadores.
+O leitor também aceita KATSUBP2: quatro tokens reservados, anexados após os merges, são preservados em `tokenizer.katu.special_ids`, `tokenizer.katu.special_tokens` e `tokenizer.ggml.eos_token_id`. A inserção automática de BOS/EOS continua desativada; o template fornece os marcadores.

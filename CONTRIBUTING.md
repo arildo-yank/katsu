@@ -1,4 +1,4 @@
-# Contribuindo com Katsu
+# Contribuindo com Katu
 
 Obrigado por ajudar a construir o core. Issues e pull requests podem ser escritas
 em português ou inglês. English contributions are welcome.
@@ -15,8 +15,8 @@ Use Rust stable, rustfmt e Clippy. Na raiz do workspace:
 
 ```sh
 cargo fmt --all -- --check
-cargo test -p katsu-core
-cargo clippy -p katsu-core --all-targets -- -D warnings
+cargo test -p katu-core
+cargo clippy -p katu-core --all-targets -- -D warnings
 ```
 
 Para rodar essas verificações a cada commit, ative o hook versionado:

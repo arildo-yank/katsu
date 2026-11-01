@@ -1,6 +1,6 @@
 # Arquitetura
 
-[Índice](README.md) · [Código do Tensor](../crates/katsu-core/src/tensor.rs)
+[Índice](README.md) · [Código do Tensor](../crates/katu-core/src/tensor.rs)
 
 ![Arquitetura e status de implementação](assets/architecture.svg)
 
@@ -8,9 +8,9 @@
 
 | Local | Responsabilidade | Status |
 | --- | --- | --- |
-| `crates/katsu-core` | Tensor, grafo, kernels CPU e Conv2D | Implementado |
-| `crates/katsu-python` | Extensão PyO3 `_native` | Somente módulo de versão |
-| `python/katsu` | Entrada do pacote Python | Reexporta `__version__` |
+| `crates/katu-core` | Tensor, grafo, kernels CPU e Conv2D | Implementado |
+| `crates/katu-python` | Extensão PyO3 `_native` | Somente módulo de versão |
+| `python/katu` | Entrada do pacote Python | Reexporta `__version__` |
 | `pyproject.toml` | Build Maturin | Configurado; integração não validada |
 | Futuro backend HTTP | Serviço de inferência | Não implementado |
 

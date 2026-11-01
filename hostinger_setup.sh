@@ -11,7 +11,7 @@ Pré-requisitos do host: Linux, driver NVIDIA, Docker e NVIDIA Container Toolkit
 --check: valida CPU×CUDA e executa 10 passos SFT do modelo 134M.
 --benchmark: executa exatamente 100 passos no corpus; sem avaliação SFT.
 --compare: testes CUDA e 100 passos no modo híbrido e no residente (pesos e Adam
-  na VRAM, KATSU_RESIDENT=1), com tokens/s e GB por passo de cada um.
+  na VRAM, KATU_RESIDENT=1), com tokens/s e GB por passo de cada um.
 --run: valida CUDA, treina no corpus e depois faz SFT (piloto experimental).
 Variáveis:
  TOKENIZER=runs/bpe-arandu-v1/tokenizer.bpe (caminho relativo ao repo)
@@ -20,10 +20,10 @@ Variáveis:
  STEPS=500 PRETRAIN_STEPS=500 LR=0.00005 MEMORY_BUDGET_MIB=12288
  CORPUS=data/corpus-bilingual-arandu-v1/train.txt
  CHECKPOINT_EVERY=25 (pesos, Adam, RNG e fase/passo; gravação atômica)
- KATSU_WARMUP_RATIO=0.05 KATSU_MIN_LR_RATIO=0.1 KATSU_CORPUS_LR=0.0001
- KATSU_RESUME= (latest.ckpt da mesma configuração; OUTPUT deve ser novo)
+ KATU_WARMUP_RATIO=0.05 KATU_MIN_LR_RATIO=0.1 KATU_CORPUS_LR=0.0001
+ KATU_RESUME= (latest.ckpt da mesma configuração; OUTPUT deve ser novo)
  OUTPUT=runs/hostinger-sft-139m-<UTC>
- KATSU_RESIDENT=1 (pesos, gradientes e Adam na VRAM; KATSU_RESIDENT_REST=device
+ KATU_RESIDENT=1 (pesos, gradientes e Adam na VRAM; KATU_RESIDENT_REST=device
    mantém somas, atenção e entropia na GPU em vez do host)
 Sem BASE, inicializa pesos aleatórios. --check é smoke; --run é um piloto de
 pré-treinamento e SFT, não um modelo final. Quantidades devem caber no orçamento.
@@ -46,19 +46,19 @@ PRETRAIN_STEPS=${PRETRAIN_STEPS:-500}
 CORPUS=${CORPUS:-data/corpus-bilingual-arandu-v1/train.txt}
 CHECKPOINT_EVERY=${CHECKPOINT_EVERY:-25}
 if [[ "$MODE" == --check ]]; then STEPS=10; PRETRAIN_STEPS=0; fi
-KATSU_BENCHMARK_ONLY=0
-if [[ "$MODE" == --benchmark || "$MODE" == --compare ]]; then STEPS=0; PRETRAIN_STEPS=100; KATSU_BENCHMARK_ONLY=1; fi
-KATSU_RESIDENT=${KATSU_RESIDENT:-}
-KATSU_RESIDENT_REST=${KATSU_RESIDENT_REST:-}
+KATU_BENCHMARK_ONLY=0
+if [[ "$MODE" == --benchmark || "$MODE" == --compare ]]; then STEPS=0; PRETRAIN_STEPS=100; KATU_BENCHMARK_ONLY=1; fi
+KATU_RESIDENT=${KATU_RESIDENT:-}
+KATU_RESIDENT_REST=${KATU_RESIDENT_REST:-}
 COMPARE=0; [[ "$MODE" == --compare ]] && COMPARE=1
-export KATSU_RESIDENT KATSU_RESIDENT_REST COMPARE
-KATSU_WARMUP_RATIO=${KATSU_WARMUP_RATIO:-0.05}
-KATSU_MIN_LR_RATIO=${KATSU_MIN_LR_RATIO:-0.1}
-KATSU_CORPUS_LR=${KATSU_CORPUS_LR:-0.0001}
-KATSU_EVAL_SAMPLES=${KATSU_EVAL_SAMPLES:-25}
-KATSU_RESUME=${KATSU_RESUME:-}
-export KATSU_WARMUP_RATIO KATSU_MIN_LR_RATIO KATSU_CORPUS_LR KATSU_EVAL_SAMPLES KATSU_RESUME
-export KATSU_BENCHMARK_ONLY
+export KATU_RESIDENT KATU_RESIDENT_REST COMPARE
+KATU_WARMUP_RATIO=${KATU_WARMUP_RATIO:-0.05}
+KATU_MIN_LR_RATIO=${KATU_MIN_LR_RATIO:-0.1}
+KATU_CORPUS_LR=${KATU_CORPUS_LR:-0.0001}
+KATU_EVAL_SAMPLES=${KATU_EVAL_SAMPLES:-25}
+KATU_RESUME=${KATU_RESUME:-}
+export KATU_WARMUP_RATIO KATU_MIN_LR_RATIO KATU_CORPUS_LR KATU_EVAL_SAMPLES KATU_RESUME
+export KATU_BENCHMARK_ONLY
 LR=${LR:-0.00005}
 MEMORY_BUDGET_MIB=${MEMORY_BUDGET_MIB:-12288}
 OUTPUT=${OUTPUT:-runs/hostinger-sft-139m-$(date -u +%Y%m%dT%H%M%SZ)}
@@ -70,7 +70,7 @@ python3 - <<'PY'
 import os, json, math
 from pathlib import Path
 root=Path.cwd().resolve()
-for key in ('TOKENIZER','BASE','OUTPUT','TRAIN_DATA','EVAL_DATA','CORPUS','KATSU_RESUME'):
+for key in ('TOKENIZER','BASE','OUTPUT','TRAIN_DATA','EVAL_DATA','CORPUS','KATU_RESUME'):
     val=os.environ[key]
     if not val: continue
     p=Path(val)
@@ -82,10 +82,10 @@ if Path(os.environ['OUTPUT']).exists(): raise SystemExit('OUTPUT já existe')
 if int(os.environ['STEPS'])<0 or int(os.environ['STEPS'])+int(os.environ['PRETRAIN_STEPS'])<=0: raise SystemExit('Passos inválidos')
 if int(os.environ['PRETRAIN_STEPS'])<0 or int(os.environ['CHECKPOINT_EVERY'])<=0: raise SystemExit('Intervalos inválidos')
 if int(os.environ['PRETRAIN_STEPS']) and not Path(os.environ['CORPUS']).is_file(): raise SystemExit('Corpus de treino ausente')
-for key, maximum in [('KATSU_WARMUP_RATIO',1),('KATSU_MIN_LR_RATIO',1)]:
+for key, maximum in [('KATU_WARMUP_RATIO',1),('KATU_MIN_LR_RATIO',1)]:
     value=float(os.environ[key])
-    if not math.isfinite(value) or not 0<value<=maximum or (key=='KATSU_WARMUP_RATIO' and value==1): raise SystemExit('Scheduler inválido')
-if os.environ['KATSU_RESUME'] and not Path(os.environ['KATSU_RESUME']).is_file(): raise SystemExit('Checkpoint de retomada ausente')
+    if not math.isfinite(value) or not 0<value<=maximum or (key=='KATU_WARMUP_RATIO' and value==1): raise SystemExit('Scheduler inválido')
+if os.environ['KATU_RESUME'] and not Path(os.environ['KATU_RESUME']).is_file(): raise SystemExit('Checkpoint de retomada ausente')
 lr=float(os.environ['LR'])
 if not math.isfinite(lr) or lr<=0: raise SystemExit('LR inválida')
 available=next(int(l.split()[1])//1024 for l in Path('/proc/meminfo').read_text().splitlines() if l.startswith('MemAvailable:'))
@@ -101,16 +101,16 @@ if os.environ['BASE']:
         if not (b/n).is_file(): raise SystemExit(f'BASE ausente: {n}')
 PY
 [[ "$MODE" != --preflight ]] || exit 0
-docker build -t katsu-cuda -f deploy/cuda/Dockerfile .
+docker build -t katu-cuda -f deploy/cuda/Dockerfile .
 docker run --rm --gpus all --user "$(id -u):$(id -g)" \
   -e CARGO_HOME=/tmp/cargo -e CARGO_TARGET_DIR=/workspace/target-hostinger \
-  -e KATSU_WARMUP_RATIO -e KATSU_MIN_LR_RATIO -e KATSU_CORPUS_LR -e KATSU_EVAL_SAMPLES -e KATSU_RESUME \
-  -e TOKENIZER -e BASE -e STEPS -e LR -e MEMORY_BUDGET_MIB -e OUTPUT -e TRAIN_DATA -e EVAL_DATA -e PRETRAIN_STEPS -e CORPUS -e CHECKPOINT_EVERY -e KATSU_BENCHMARK_ONLY \
-  -e KATSU_RESIDENT -e KATSU_RESIDENT_REST -e COMPARE \
-  -v "$PWD:/workspace" katsu-cuda bash -c '
+  -e KATU_WARMUP_RATIO -e KATU_MIN_LR_RATIO -e KATU_CORPUS_LR -e KATU_EVAL_SAMPLES -e KATU_RESUME \
+  -e TOKENIZER -e BASE -e STEPS -e LR -e MEMORY_BUDGET_MIB -e OUTPUT -e TRAIN_DATA -e EVAL_DATA -e PRETRAIN_STEPS -e CORPUS -e CHECKPOINT_EVERY -e KATU_BENCHMARK_ONLY \
+  -e KATU_RESIDENT -e KATU_RESIDENT_REST -e COMPARE \
+  -v "$PWD:/workspace" katu-cuda bash -c '
 set -euo pipefail
-cargo test --release --locked -p katsu-core --features cuda --test cuda -- --include-ignored
-cargo test --release --locked -p katsu-server --features cuda --bin train_sft
+cargo test --release --locked -p katu-core --features cuda --test cuda -- --include-ignored
+cargo test --release --locked -p katu-server --features cuda --bin train_sft
 python3 - <<"PY"
 import os,json,struct,shutil
 from pathlib import Path
@@ -123,16 +123,16 @@ if not os.environ["BASE"]:
     shutil.copyfile(src,p/"tokenizer.bpe")
     (p/"config.json").write_text(json.dumps(dict(vocab_size=vocab,block_size=256,embed_dim=768,layers=12,heads=12)))
 PY
-if [[ -z "$BASE" ]]; then BASE="${OUTPUT}-init"; export KATSU_INIT_RANDOM=1; fi
-export KATSU_BACKEND=cuda KATSU_MEMORY_BUDGET_MIB="$MEMORY_BUDGET_MIB" KATSU_CHECKPOINT_EVERY="$CHECKPOINT_EVERY"
+if [[ -z "$BASE" ]]; then BASE="${OUTPUT}-init"; export KATU_INIT_RANDOM=1; fi
+export KATU_BACKEND=cuda KATU_MEMORY_BUDGET_MIB="$MEMORY_BUDGET_MIB" KATU_CHECKPOINT_EVERY="$CHECKPOINT_EVERY"
 train() {
-  cargo run --release --locked -p katsu-server --features cuda --bin train_sft -- \
+  cargo run --release --locked -p katu-server --features cuda --bin train_sft -- \
    "$BASE" "$TRAIN_DATA" "$EVAL_DATA" "$CORPUS" "$1" "$STEPS" "$PRETRAIN_STEPS" "$LR"
   (cd "$1" && sha256sum model.ckpt tokenizer.bpe config.json metrics.jsonl sft-report.json > SHA256SUMS)
 }
 if [[ "$COMPARE" == 1 ]]; then
-  KATSU_RESIDENT= train "$OUTPUT-hybrid"
-  KATSU_RESIDENT=1 train "$OUTPUT-resident"
+  KATU_RESIDENT= train "$OUTPUT-hybrid"
+  KATU_RESIDENT=1 train "$OUTPUT-resident"
   python3 - "$OUTPUT-hybrid" "$OUTPUT-resident" <<"PY"
 import json,statistics,sys
 for run in sys.argv[1:]:

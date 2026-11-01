@@ -11,7 +11,7 @@ a 82 tokens/s, contra 305 no Mac com Accelerate.
 - `ParamStore` (`src/resident.rs`): pesos, gradientes e momentos do Adam numa arena por buffer.
   Os parâmetros residentes são folhas `Tensor::resident` sem cópia no host; matmul e linear com
   peso residente rodam no store, e o backward soma o gradiente lá mesmo.
-- `KatsuLmConfig::resident_layout`: os 110M parâmetros que só aparecem como lado direito de matmul
+- `KatuLmConfig::resident_layout`: os 110M parâmetros que só aparecem como lado direito de matmul
   (Q, K, V, Wo, MLP e cabeça de saída). Embeddings, LayerNorm e bias (~25M) ficam no host. Os Wo de
   uma camada são vizinhos na arena: o concat das cabeças vira uma faixa, sem cópia.
 - `Tensor::matmul_many_with_backend` + `Tensor::columns`: Q, K e V de todas as cabeças numa
@@ -22,9 +22,9 @@ a 82 tokens/s, contra 305 no Mac com Accelerate.
 - `HostParamStore`: referência em memória do host, com as contas do `Backend` dado e a contagem
   dos bytes que uma GPU trocaria. `CudaParamStore` (feature `cuda`): a mesma arena na VRAM, com
   kernels `gemm_acc`, `adam` e `sumsq`.
-- `train_sft`: `KATSU_RESIDENT=1` liga o modo residente (store CUDA com `KATSU_BACKEND=cuda`;
+- `train_sft`: `KATU_RESIDENT=1` liga o modo residente (store CUDA com `KATU_BACKEND=cuda`;
   senão o de referência). Somas, atenção e entropia rodam no host
-  (`KATSU_RESIDENT_REST=device` as mantém no backend). `metrics.jsonl` ganha `transfer_bytes`.
+  (`KATU_RESIDENT_REST=device` as mantém no backend). `metrics.jsonl` ganha `transfer_bytes`.
 
 ## Medido
 
@@ -49,7 +49,7 @@ compara o store CUDA com o de referência, mas **precisa de uma NVIDIA**: aqui s
 
 - **Velocidade na L40S.** O store CUDA não rodou numa GPU. O próximo passo é um benchmark curto:
   `cargo test --features cuda -- --ignored` e algumas centenas de passos do `train_sft` com
-  `KATSU_RESIDENT=1 KATSU_BACKEND=cuda`, lendo `step_seconds` e `transfer_bytes`.
+  `KATU_RESIDENT=1 KATU_BACKEND=cuda`, lendo `step_seconds` e `transfer_bytes`.
 - **O teto agora é o host.** LayerNorm, GELU, softmax e atenção rodam na CPU (no Mac, ~1,5 s
   de um passo de ~3 s). Com 1,74 GB por passo no PCIe, o limite deixa de ser a cópia dos pesos e
   passa a ser essas operações e o GEMM de referência (tiles 16×16, sem tensor cores). Ativações

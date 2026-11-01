@@ -375,7 +375,7 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("--count", type=int, default=24000)
     p.add_argument("--out", type=Path, required=True)
-    p.add_argument("--bench", type=Path, default=Path(__file__).resolve().parents[2] / "ARANDU/katsu_native/benchmarks/arandubench.jsonl")
+    p.add_argument("--bench", type=Path, default=Path(__file__).resolve().parents[2] / "ARANDU/katu_native/benchmarks/arandubench.jsonl")
     p.add_argument("--seed", type=int, default=2029)
     p.add_argument("--vocab", type=Path, default=Path(__file__).resolve().parents[1] / "data/pretrain/val.jsonl")
     a = p.parse_args(argv)

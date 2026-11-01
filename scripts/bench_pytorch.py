@@ -1,22 +1,22 @@
-"""Treina o mesmo 134M do Katsu em PyTorch, sobre os lotes exatos que o Katsu treinou, para
+"""Treina o mesmo 134M do Katu em PyTorch, sobre os lotes exatos que o Katu treinou, para
 comparar velocidade com os mesmos dados na mesma GPU.
 
-  # 1) o Katsu grava os lotes de cada passo
-  KATSU_ENGINE=gpu KATSU_DUMP_BATCHES=batches.jsonl ... train_sft ... runs/bench-katsu 100 0 0.0003
+  # 1) o Katu grava os lotes de cada passo
+  KATU_ENGINE=gpu KATU_DUMP_BATCHES=batches.jsonl ... train_sft ... runs/bench-katu 100 0 0.0003
   # 2) o PyTorch treina os mesmos lotes
   python3 scripts/bench_pytorch.py batches.jsonl --mode fp32 --out runs/bench-torch-fp32.json
 
 Modos:
-  fp32  matmul em FP32 puro (sem TF32) e atenção explícita: as mesmas contas do Katsu (tiled64)
+  fp32  matmul em FP32 puro (sem TF32) e atenção explícita: as mesmas contas do Katu (tiled64)
   tf32  matmul em TF32 e scaled_dot_product_attention (o PyTorch padrão numa GPU moderna)
   bf16  autocast BF16, FlashAttention e Adam fused (o PyTorch otimizado; --compile soma torch.compile)
 
 Com --weights runs/<run>/migrated.ckpt (e o config.json ao lado), o PyTorch parte dos mesmos pesos
-do Katsu; no modo fp32 a perda do passo 1 tem de bater com a do Katsu.
+do Katu; no modo fp32 a perda do passo 1 tem de bater com a do Katu.
 
 Mesma arquitetura (pre-LN, GELU tanh, sem bias em Q/K/V e Wo, cabeça sem bias), mesma perda
 (entropia cruzada ponderada por linha, como o SftBatch) e mesmo Adam (lr 3e-4, betas 0.9/0.999,
-eps 1e-8). Tokens/s contam só os tokens reais de entrada, como no Katsu.
+eps 1e-8). Tokens/s contam só os tokens reais de entrada, como no Katu.
 """
 import argparse
 import json
@@ -77,8 +77,8 @@ class LM(nn.Module):
         return self.head(self.lnf(x))
 
 
-def load_katsu(model, ckpt):
-    """Copia um checkpoint KATSUCK1 para o modelo. O Katsu multiplica x·W com W [entrada, saída];
+def load_katu(model, ckpt):
+    """Copia um checkpoint KATSUCK1 para o modelo. O Katu multiplica x·W com W [entrada, saída];
     o nn.Linear guarda [saída, entrada], então as matrizes entram transpostas. Q, K e V de cada
     cabeça viram colunas [q_0..q_H | k_0..k_H | v_0..v_H], na ordem do split do forward."""
     config = json.load(open(Path(ckpt).parent / "config.json"))
@@ -124,11 +124,11 @@ def main():
     device = "cuda"
     model = LM(flash=args.mode != "fp32")
     if args.weights:
-        load_katsu(model, args.weights)
+        load_katu(model, args.weights)
     model = model.to(device)
     params = sum(p.numel() for p in model.parameters())
     if params != 134_367_744:
-        raise SystemExit(f"modelo diferente do Katsu: {params} parâmetros")
+        raise SystemExit(f"modelo diferente do Katu: {params} parâmetros")
     opt = torch.optim.Adam(model.parameters(), lr=3e-4, betas=(0.9, 0.999), eps=1e-8,
                            fused=args.mode == "bf16")
     step_fn = torch.compile(model) if args.compile else model

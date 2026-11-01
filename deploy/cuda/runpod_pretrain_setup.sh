@@ -31,7 +31,7 @@ fi
 # shellcheck disable=SC1091
 source "$HOME/.cargo/env"
 export LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64:${LD_LIBRARY_PATH:-}
-cargo build --release --locked -p katsu-server --features cuda --bin train_sft --bin tokenize_corpus &
+cargo build --release --locked -p katu-server --features cuda --bin train_sft --bin tokenize_corpus &
 build=$!
 
 # O limite real de CPU do pod vem do cgroup (ex.: 10,2 vCPUs), não do nproc.

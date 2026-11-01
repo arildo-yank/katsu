@@ -14,7 +14,7 @@ Por isso `Sgd::step` não altera parâmetros no lugar: devolve **novas folhas**
   sem devolver nenhum parâmetro parcial.
 
 ```rust
-use katsu_core::{fit, Sgd, Tensor, TensorError};
+use katu_core::{fit, Sgd, Tensor, TensorError};
 
 fn main() -> Result<(), TensorError> {
     // y = 2x + 1; o bias entra como uma coluna de uns.
@@ -61,7 +61,7 @@ executável grava uma linha por época e faz flush a cada uma, para o monitor
 acompanhar o arquivo enquanto o treino roda:
 
 ```sh
-cargo run -p katsu-core --example train -- metrics.jsonl
+cargo run -p katu-core --example train -- metrics.jsonl
 ```
 
 Sem argumento, as linhas vão para stdout e o resumo final vai para stderr.

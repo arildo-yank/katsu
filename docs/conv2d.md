@@ -1,6 +1,6 @@
 # Conv2D e explicabilidade
 
-[Índice](README.md) · [Implementação](../crates/katsu-core/src/conv2d.rs)
+[Índice](README.md) · [Implementação](../crates/katu-core/src/conv2d.rs)
 
 ![Layouts e fluxo de derivadas da Conv2D](assets/conv2d.svg)
 
@@ -74,7 +74,7 @@ mesmo número de elementos. Chamar backward local sem cache retorna `MissingForw
 ## Exemplo numérico completo
 
 ```rust
-use katsu_core::{Conv2D, Tensor, TensorError};
+use katu_core::{Conv2D, Tensor, TensorError};
 
 fn main() -> Result<(), TensorError> {
     let x = Tensor::new((1..=9).map(|n| n as f32).collect(), &[1,1,3,3])?;
@@ -92,10 +92,10 @@ fn main() -> Result<(), TensorError> {
 }
 ```
 
-Para RGB 224×224, execute o [exemplo maior](../crates/katsu-core/examples/conv2d/main.rs):
+Para RGB 224×224, execute o [exemplo maior](../crates/katu-core/examples/conv2d/main.rs):
 
 ```sh
-cargo run -p katsu-core --release --example conv2d
+cargo run -p katu-core --release --example conv2d
 ```
 
 ## O que falta para Grad-CAM

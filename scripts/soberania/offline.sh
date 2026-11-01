@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Compila e testa o Katsu com a rede cortada, a partir de vendor/ (rode vendor.sh antes).
+# Compila e testa o Katu com a rede cortada, a partir de vendor/ (rode vendor.sh antes).
 #
 #   scripts/soberania/offline.sh
 #
@@ -41,10 +41,10 @@ fi
 echo "rede cortada: curl para crates.io falhou dentro do isolamento, como esperado"
 
 run() { echo "+ $*"; isolate rustup run "$toolchain" cargo "$@" --locked --offline; }
-run test -p katsu-core -q
-run test -p katsu-rag -q
-run test -p katsu-server -q
-run build -p katsu-server --features cuda -q
-run run -p katsu-core --example train -q > "$work/train.out"
+run test -p katu-core -q
+run test -p katu-rag -q
+run test -p katu-server -q
+run build -p katu-server --features cuda -q
+run run -p katu-core --example train -q > "$work/train.out"
 tail -1 "$work/train.out"
 echo "OK: compilado e testado sem rede, só com vendor/"

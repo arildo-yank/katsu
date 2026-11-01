@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""KATSUCK1 + KATSUBP1 -> GGUF v3/F32, arquitetura customizada katsu.
-Não anuncia compatibilidade com llama.cpp: Arandu precisa de um loader Katsu.
+"""KATSUCK1 + KATSUBP1 -> GGUF v3/F32, arquitetura customizada katu.
+Não anuncia compatibilidade com llama.cpp: Arandu precisa de um loader Katu.
 """
 import argparse
 import hashlib
@@ -156,32 +156,32 @@ def export(run, output):
     alphabet = byte_alphabet()
     texts = [''.join(alphabet[b] for b in token) for token in tokens]
     metadata = {
-        'general.architecture': (STRING, 'katsu'),
-        'general.name': (STRING, 'Katsu native'),
+        'general.architecture': (STRING, 'katu'),
+        'general.name': (STRING, 'Katu native'),
         'general.alignment': (U32, ALIGNMENT),
         'general.file_type': (U32, 0),
-        'katsu.format_version': (U32, 1),
-        'katsu.tensor_layout': (STRING, 'per-head-row-major-v1'),
-        'katsu.context_length': (U32, config['block_size']),
-        'katsu.embedding_length': (U32, config['embed_dim']),
-        'katsu.block_count': (U32, config['layers']),
-        'katsu.attention.head_count': (U32, config['heads']),
-        'katsu.attention.layer_norm_epsilon': (F32, 1e-5),
-        'katsu.source_checkpoint_sha256': (STRING, sha256(run / 'model.ckpt')),
-        'katsu.source_tokenizer_sha256': (STRING, sha256(run / 'tokenizer.bpe')),
-        'tokenizer.ggml.model': (STRING, 'katsu-bpe'),
+        'katu.format_version': (U32, 1),
+        'katu.tensor_layout': (STRING, 'per-head-row-major-v1'),
+        'katu.context_length': (U32, config['block_size']),
+        'katu.embedding_length': (U32, config['embed_dim']),
+        'katu.block_count': (U32, config['layers']),
+        'katu.attention.head_count': (U32, config['heads']),
+        'katu.attention.layer_norm_epsilon': (F32, 1e-5),
+        'katu.source_checkpoint_sha256': (STRING, sha256(run / 'model.ckpt')),
+        'katu.source_tokenizer_sha256': (STRING, sha256(run / 'tokenizer.bpe')),
+        'tokenizer.ggml.model': (STRING, 'katu-bpe'),
         'tokenizer.ggml.tokens': (ARRAY, (STRING, texts)),
         'tokenizer.ggml.merges': (ARRAY, (STRING, [texts[a] + ' ' + texts[b] for a, b in merges])),
         'tokenizer.ggml.add_bos_token': (BOOL, False),
         'tokenizer.ggml.add_eos_token': (BOOL, False),
-        'tokenizer.katsu.pre': (STRING, 'unicode-white-space-inclusive-v1'),
-        'tokenizer.katsu.encoding': (STRING, 'gpt2-byte-to-unicode'),
-        'tokenizer.katsu.merge_ids': (ARRAY, (U32, [i for pair in merges for i in pair])),
+        'tokenizer.katu.pre': (STRING, 'unicode-white-space-inclusive-v1'),
+        'tokenizer.katu.encoding': (STRING, 'gpt2-byte-to-unicode'),
+        'tokenizer.katu.merge_ids': (ARRAY, (U32, [i for pair in merges for i in pair])),
     }
     base_vocab=256+len(merges)
     if len(tokens)==base_vocab+4:
-        metadata['tokenizer.katsu.special_ids']=(ARRAY,(U32,list(range(base_vocab,base_vocab+4))))
-        metadata['tokenizer.katsu.special_tokens']=(ARRAY,(STRING,['<|system|>','<|user|>','<|assistant|>','<|end|>']))
+        metadata['tokenizer.katu.special_ids']=(ARRAY,(U32,list(range(base_vocab,base_vocab+4))))
+        metadata['tokenizer.katu.special_tokens']=(ARRAY,(STRING,['<|system|>','<|user|>','<|assistant|>','<|end|>']))
         metadata['tokenizer.ggml.eos_token_id']=(U32,base_vocab+3)
     header = bytearray(struct.pack('<4sIQQ', b'GGUF', 3, len(tensors), len(metadata)))
     for key, (kind, value) in metadata.items():
@@ -197,7 +197,7 @@ def export(run, output):
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = None
     try:
-        with tempfile.NamedTemporaryFile(dir=output.parent, prefix='.katsu-gguf-', delete=False) as out:
+        with tempfile.NamedTemporaryFile(dir=output.parent, prefix='.katu-gguf-', delete=False) as out:
             temporary = Path(out.name)
             out.write(header)
             with (run / 'model.ckpt').open('rb') as source:
@@ -217,7 +217,7 @@ def export(run, output):
         if temporary is not None:
             temporary.unlink(missing_ok=True)
     return {'output': str(output), 'tensors': len(tensors), 'vocab_size': len(tokens), 'sha256': sha256(output),
-            'architecture': 'katsu', 'requires_katsu_loader': True}
+            'architecture': 'katu', 'requires_katu_loader': True}
 
 
 def main():

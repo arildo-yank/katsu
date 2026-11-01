@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Mede se o 1B da V2 (d = 2048, 18 camadas, 16 cabeças, ~1,04B parâmetros) cabe e roda numa GPU com o
-# motor GPU atual (FP32, Adam na GPU), sem treinar de verdade: pesos aleatórios e KATSU_BENCHMARK_ONLY.
+# motor GPU atual (FP32, Adam na GPU), sem treinar de verdade: pesos aleatórios e KATU_BENCHMARK_ONLY.
 # Usa a fase de corpus (janelas cheias de 256 tokens × batch), onde está o pico de memória.
 # O 134M entra como controle (~24.000 tokens/s medidos na RTX 4090 em 26/10/2026).
 #
@@ -28,8 +28,8 @@ TRAIN=data/corpus-bilingual-arandu-v1/sft/arandu_sft.jsonl
 EVAL=data/corpus-bilingual-arandu-v1/sft/arandu_eval.jsonl
 
 set -e
-cargo test --release --locked -p katsu-core --features cuda --test cuda -- --include-ignored 2>&1 | tee "$OUT/cuda-tests.txt" | tail -3
-cargo build --release --locked -p katsu-server --features cuda --bin train_sft
+cargo test --release --locked -p katu-core --features cuda --test cuda -- --include-ignored 2>&1 | tee "$OUT/cuda-tests.txt" | tail -3
+cargo build --release --locked -p katu-server --features cuda --bin train_sft
 set +e
 
 probe() {  # nome largura camadas cabeças batch passos
@@ -49,8 +49,8 @@ shutil.copyfile(src, base / "tokenizer.bpe")
 PY
   nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -lms 500 > "$run.mem" &
   local sampler=$!
-  KATSU_INIT_RANDOM=1 KATSU_BACKEND=cuda KATSU_ENGINE=gpu KATSU_BENCHMARK_ONLY=1 KATSU_BATCH=$batch \
-    KATSU_CHECKPOINT_EVERY=100000 KATSU_MEMORY_BUDGET_MIB=999999 \
+  KATU_INIT_RANDOM=1 KATU_BACKEND=cuda KATU_ENGINE=gpu KATU_BENCHMARK_ONLY=1 KATU_BATCH=$batch \
+    KATU_CHECKPOINT_EVERY=100000 KATU_MEMORY_BUDGET_MIB=999999 \
     timeout 1200 target/release/train_sft "$base" "$TRAIN" "$EVAL" "$TRAIN" "$run" 0 "$steps" 0.00005 > "$run.log" 2>&1
   local rc=$?
   kill "$sampler" 2>/dev/null; wait "$sampler" 2>/dev/null

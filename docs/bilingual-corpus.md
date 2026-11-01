@@ -67,7 +67,7 @@ externo de transferência cross-lingual. A inferência é acessada diretamente p
 ```bash
 python3 scripts/build_bilingual_corpus.py --portuguese corpus --output data/corpus-bilingual-v1
 python3 scripts/build_bilingual_sft.py --source data/sft --output data/sft-bilingual-v2
-cargo run --release --locked -p katsu-server --bin train_bilingual_bpe -- \
+cargo run --release --locked -p katu-server --bin train_bilingual_bpe -- \
   data/corpus-bilingual-v1 runs/bpe-bilingual-v2 data/sft-bilingual-v2
 ```
 

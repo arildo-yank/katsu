@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Dimensão efetiva dos pesos de um checkpoint Katsu (KATSUCK1), para comparar runs de tamanhos diferentes.
+"""Dimensão efetiva dos pesos de um checkpoint Katu (KATSUCK1), para comparar runs de tamanhos diferentes.
 
   python3 scripts/effective_dimension.py runs/mac-sft-special-v1 --base runs/mac-sft-special-v1/migrated.ckpt \\
       --json runs/mac-sft-special-v1/effective-dimension.json
@@ -27,7 +27,7 @@ MAGIC = b"KATSUCK1"
 def load_checkpoint(path) -> list[np.ndarray]:
     data = Path(path).read_bytes()
     if data[:8] != MAGIC:
-        raise ValueError(f"{path}: não é um checkpoint Katsu (KATSUCK1)")
+        raise ValueError(f"{path}: não é um checkpoint Katu (KATSUCK1)")
     try:
         (count,) = struct.unpack_from("<Q", data, 8)
         offset, tensors = 16, []
@@ -47,7 +47,7 @@ def load_checkpoint(path) -> list[np.ndarray]:
 
 
 def named_params(params, config) -> dict[str, np.ndarray]:
-    """Mesmo layout de KatsuLmConfig: wte, wpe, camadas (LN1, cabeças Q/K/V/O, LN2, MLP), LN final, head."""
+    """Mesmo layout de KatuLmConfig: wte, wpe, camadas (LN1, cabeças Q/K/V/O, LN2, MLP), LN final, head."""
     names = ["wte", "wpe"]
     for layer in range(config["layers"]):
         names += [f"L{layer}.ln1_g", f"L{layer}.ln1_b"]

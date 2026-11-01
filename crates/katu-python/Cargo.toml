@@ -1,0 +1,16 @@
+[package]
+name = "katu-python"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+katu-core.workspace = true
+katu-math.workspace = true
+# abi3-py310: um wheel só serve para o Python 3.10 em diante.
+pyo3 = { workspace = true, features = ["abi3-py310"] }

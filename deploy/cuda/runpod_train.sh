@@ -20,7 +20,7 @@
 #
 # Passos = ceil(EPOCHS × exemplos de treino ÷ BATCH). MAX_HOURS corta o treino pelo relógio para
 # não estourar o orçamento; o latest.ckpt (a cada CHECKPOINT_EVERY passos) permite retomar com
-# KATSU_RESUME=<run>/latest.ckpt e um OUTPUT novo. Com batch 64 uma época tem 4× menos passos que
+# KATU_RESUME=<run>/latest.ckpt e um OUTPUT novo. Com batch 64 uma época tem 4× menos passos que
 # com 16; a LR é um ponto de partida e não foi recalibrada para o batch maior.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -55,19 +55,19 @@ eval=$(grep -c . "$DATA.eval.jsonl")
 steps=$(( (EPOCHS * train + BATCH - 1) / BATCH ))
 echo "motor $ENGINE ($GEMM), treino $train, validação $eval (medida em $EVAL_SAMPLES), $EPOCHS épocas, batch $BATCH, lr $LR: $steps passos, corte em ${MAX_HOURS} h -> $OUTPUT"
 
-cargo build --release --locked -p katsu-server --features cuda --bin train_sft
+cargo build --release --locked -p katu-server --features cuda --bin train_sft
 case "$ENGINE" in
-  gpu) export KATSU_ENGINE=gpu KATSU_GEMM="$GEMM" ;;
-  hybrid) export KATSU_RESIDENT=1 ;;
+  gpu) export KATU_ENGINE=gpu KATU_GEMM="$GEMM" ;;
+  hybrid) export KATU_RESIDENT=1 ;;
   *) echo "ENGINE deve ser gpu ou hybrid" >&2; exit 1 ;;
 esac
-export KATSU_BACKEND=cuda KATSU_BATCH="$BATCH" KATSU_EVAL_SAMPLES="$EVAL_SAMPLES"
-export KATSU_CHECKPOINT_EVERY="$CHECKPOINT_EVERY" KATSU_MEMORY_BUDGET_MIB=${MEMORY_BUDGET_MIB:-16384}
+export KATU_BACKEND=cuda KATU_BATCH="$BATCH" KATU_EVAL_SAMPLES="$EVAL_SAMPLES"
+export KATU_CHECKPOINT_EVERY="$CHECKPOINT_EVERY" KATU_MEMORY_BUDGET_MIB=${MEMORY_BUDGET_MIB:-16384}
 status=0
 timeout --signal=INT "${MAX_HOURS}h" target/release/train_sft \
   "$BASE" "$DATA.train.jsonl" "$DATA.eval.jsonl" "$DATA.train.jsonl" "$OUTPUT" "$steps" 0 "$LR" || status=$?
 if [[ $status == 124 || $status == 130 ]]; then
-  echo "corte por tempo (${MAX_HOURS} h): retome com KATSU_RESUME=$OUTPUT/latest.ckpt e um OUTPUT novo" >&2
+  echo "corte por tempo (${MAX_HOURS} h): retome com KATU_RESUME=$OUTPUT/latest.ckpt e um OUTPUT novo" >&2
   exit 124
 fi
 [[ $status == 0 ]] || exit $status

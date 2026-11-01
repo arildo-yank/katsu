@@ -1,4 +1,4 @@
-"""Gera a lista de componentes do Katsu (SBOM, CycloneDX 1.5) a partir do Cargo.lock.
+"""Gera a lista de componentes do Katu (SBOM, CycloneDX 1.5) a partir do Cargo.lock.
 
 Cada crate de terceiros entra com versão, licença, o SHA-256 do Cargo.lock e quais crates do
 workspace a usam (só dependências normais, com todas as features: inclui o CUDA). Sem data nem
@@ -62,13 +62,13 @@ def build():
             "purl": f"pkg:cargo/{p['name']}@{p['version']}",
             "licenses": [{"expression": p.get("license") or "NOASSERTION"}],
             "hashes": [{"alg": "SHA-256", "content": checksum}],
-            "properties": [{"name": "katsu:used-by", "value": ",".join(used_by[pid])}],
+            "properties": [{"name": "katu:used-by", "value": ",".join(used_by[pid])}],
         })
     return {
         "bomFormat": "CycloneDX",
         "specVersion": "1.5",
         "version": 1,
-        "metadata": {"component": {"type": "application", "name": "katsu", "licenses": [{"license": {"id": "MIT"}}]}},
+        "metadata": {"component": {"type": "application", "name": "katu", "licenses": [{"license": {"id": "MIT"}}]}},
         "components": components,
     }
 

@@ -1,8 +1,8 @@
-# Corpus do Katsu LM
+# Corpus do Katu LM
 
 [Índice](README.md)
 
-O corpus inicial do Katsu LM usa **literatura brasileira em domínio público**.
+O corpus inicial do Katu LM usa **literatura brasileira em domínio público**.
 A versão PT/EN posterior está documentada em [Corpus bilíngue](bilingual-corpus.md);
 os arquivos originais continuam preservados. Os textos
 vêm do Project Gutenberg e não são versionados no git (`/corpus/` está no `.gitignore`).
@@ -26,7 +26,7 @@ scripts/fetch-corpus.sh
 
 Todos os autores morreram há mais de 70 anos; as obras estão em domínio público no
 Brasil (Lei 9.610/98, art. 41). O Project Gutenberg distribui os arquivos sob a sua
-licença; o exemplo `katsu_lm` remove o cabeçalho e o rodapé dessa licença antes do treino.
+licença; o exemplo `katu_lm` remove o cabeçalho e o rodapé dessa licença antes do treino.
 Ficaram de fora traduções para outros idiomas (por exemplo, *Brazilian Tales*).
 
 ## Características

@@ -4,7 +4,7 @@ Apple M3, 8 núcleos, 8 GB (3 GB de swap em uso durante a medição), CPU apenas
 Perfil 134M, contexto 256, dados aleatórios. Comando:
 
 ```
-cargo run --release -p katsu-core --example profile_step -- <batch> 134m 2
+cargo run --release -p katu-core --example profile_step -- <batch> 134m 2
 ```
 
 Referência para medir cada otimização antes/depois.
@@ -167,14 +167,14 @@ Erro relativo < 1e-6 (só a ordem das somas muda).
 
 - `AccelerateBackend` (macOS): matmul e matmul_backward pelo Accelerate, com as transposições
   pelo próprio sgemm; o resto delega ao `CpuBackend`, que segue como referência exata. Uso:
-  `KATSU_BACKEND=accelerate` no `train_sft`; 4º argumento `accelerate` no `profile_step`.
-- `train_sft` em lotes: `KATSU_BATCH` (1 a 64). Exemplos completados no fim até o maior do lote;
+  `KATU_BACKEND=accelerate` no `train_sft`; 4º argumento `accelerate` no `profile_step`.
+- `train_sft` em lotes: `KATU_BATCH` (1 a 64). Exemplos completados no fim até o maior do lote;
   com atenção causal o padding não afeta os tokens reais. A perda é a média das perdas de cada
   exemplo, o mesmo objetivo do batch 1 (batch 1 é bit a bit igual ao caminho antigo; teste
   `batch_loss_is_the_mean_of_single_example_losses`).
 - O guard do modelo grande aceita `accelerate` com estimativa medida: 16 bytes/parâmetro +
   300 MiB por janela + 512 MiB (134M, batch 4: 3.762 MiB). Ainda exige
-  `KATSU_MEMORY_BUDGET_MIB` acima disso. CUDA mantém a estimativa antiga.
+  `KATU_MEMORY_BUDGET_MIB` acima disso. CUDA mantém a estimativa antiga.
 - GELU, cross-entropy e softmax da atenção em paralelo por linha (rayon), e o primeiro gradiente
   de cada nó vira o adjunto em vez de zerar um buffer e somar. Mesmas contas por elemento.
 

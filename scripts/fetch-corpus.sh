@@ -1,5 +1,5 @@
 #!/bin/sh
-# Baixa o corpus do Katsu LM: literatura brasileira em domínio público (Project Gutenberg).
+# Baixa o corpus do Katu LM: literatura brasileira em domínio público (Project Gutenberg).
 # Uso: scripts/fetch-corpus.sh [pasta]   (padrão: corpus/)
 set -eu
 dest="${1:-corpus}"

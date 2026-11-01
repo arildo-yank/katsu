@@ -1,4 +1,4 @@
-"""SFT de leitura (RAG) e de cálculo para o Arandu, no formato que o Katsu Server usa.
+"""SFT de leitura (RAG) e de cálculo para o Arandu, no formato que o Katu Server usa.
 
 Leitura: trecho do começo de um artigo da Wikipedia (split de TREINO, nunca a validação, de onde
 sai a régua de leitura), pergunta cuja resposta está no trecho e resposta curta copiada dele; e
@@ -8,7 +8,7 @@ ano de fundação e definição ("O que é X?" → a primeira frase).
 
 Cálculo: perguntas de conta em português → `[CALC: expressão]`, que o servidor resolve.
 
-Exclui os assuntos da régua de conhecimento (ARANDU/katsu_native/benchmarks/conhecimento.jsonl),
+Exclui os assuntos da régua de conhecimento (ARANDU/katu_native/benchmarks/conhecimento.jsonl),
 para o SFT não ensinar as respostas que a régua mede.
 
   python3 scripts/build_reading_sft.py --reading 16000 --calc 4000 --out data/sft/reading_calc
@@ -23,7 +23,7 @@ from pathlib import Path
 
 KATSU = Path(__file__).resolve().parents[1]
 CORPUS = KATSU / "data/pretrain/train.jsonl"
-RULER = KATSU.parent / "ARANDU/katsu_native/benchmarks/conhecimento.jsonl"
+RULER = KATSU.parent / "ARANDU/katu_native/benchmarks/conhecimento.jsonl"
 READING_SYSTEM = "Você é o Arandu. Responda em português do Brasil usando só o trecho."
 CHAT_SYSTEM = ("Você é o Arandu. Responda em português do Brasil. Nesta conversa a busca web está desligada; "
                "não alegue ter pesquisado na internet.")
@@ -157,8 +157,8 @@ def main(argv=None):
         rows.append(row(i, "ausente", READING_SYSTEM, f"Trecho: {other}\nPergunta: {q}", r.choice(NO_DATA)))
     rows += [row(i, "calc", CHAT_SYSTEM, q, ans) for i, (q, ans) in enumerate(calc_examples(r, a.calc))]
     sys.path.insert(0, str(KATSU.parent / "ARANDU/scripts"))
-    from katsu_bpe import KatsuBpe
-    tok = KatsuBpe.load(TOKENIZER)
+    from katu_bpe import KatuBpe
+    tok = KatuBpe.load(TOKENIZER)
     before = len(rows)
     rows = [x for x in rows if fits(tok, x)]
     too_long = before - len(rows)

@@ -25,8 +25,8 @@ export CORPUS=data/corpus-bilingual-arandu-v1/train.txt
 python3 scripts/verify_gpu_data.py --selected
 OUTPUT=${OUTPUT:-runs/compare-$(date -u +%Y%m%dT%H%M%SZ)}
 
-cargo test --release --locked -p katsu-core --features cuda --test cuda -- --include-ignored
-cargo test --release --locked -p katsu-server --features cuda --bin train_sft
+cargo test --release --locked -p katu-core --features cuda --test cuda -- --include-ignored
+cargo test --release --locked -p katu-server --features cuda --bin train_sft
 
 # Pesos aleatórios com o tokenizer lacrado: o benchmark mede velocidade, não qualidade.
 BASE="$OUTPUT-init"
@@ -42,14 +42,14 @@ vocab = 256 + struct.unpack_from("<I", data, 8)[0] + (4 if data[:8] == b"KATSUBP
 shutil.copyfile(src, base / "tokenizer.bpe")
 (base / "config.json").write_text(json.dumps(dict(vocab_size=vocab, block_size=256, embed_dim=768, layers=12, heads=12)))
 PY
-export KATSU_INIT_RANDOM=1 KATSU_BACKEND=cuda KATSU_BENCHMARK_ONLY=1 KATSU_CHECKPOINT_EVERY=1000
-export KATSU_MEMORY_BUDGET_MIB=${MEMORY_BUDGET_MIB:-12288}
+export KATU_INIT_RANDOM=1 KATU_BACKEND=cuda KATU_BENCHMARK_ONLY=1 KATU_CHECKPOINT_EVERY=1000
+export KATU_MEMORY_BUDGET_MIB=${MEMORY_BUDGET_MIB:-12288}
 train() {
-  cargo run --release --locked -p katsu-server --features cuda --bin train_sft -- \
+  cargo run --release --locked -p katu-server --features cuda --bin train_sft -- \
     "$BASE" "$TRAIN_DATA" "$EVAL_DATA" "$CORPUS" "$1" 0 100 0.00005
 }
-KATSU_RESIDENT= train "$OUTPUT-hybrid"
-KATSU_RESIDENT=1 train "$OUTPUT-resident"
+KATU_RESIDENT= train "$OUTPUT-hybrid"
+KATU_RESIDENT=1 train "$OUTPUT-resident"
 python3 - "$OUTPUT-hybrid" "$OUTPUT-resident" <<'PY'
 import json, statistics, sys
 for run in sys.argv[1:]:

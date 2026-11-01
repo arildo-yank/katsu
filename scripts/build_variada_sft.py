@@ -8,7 +8,7 @@ Junta:
 - um caso sem resposta para cada quatro (a pergunta com o trecho de outro artigo);
 - 8.000 exemplos sorteados do mix_reading_calc.train (leitura dos 7 tipos, cálculo, contexto e
   destilação), para o modelo não esquecer o que já sabe.
-Exemplos acima do contexto (256 tokens) saem, contados com o tokenizer do Katsu.
+Exemplos acima do contexto (256 tokens) saem, contados com o tokenizer do Katu.
 """
 import argparse
 import hashlib
@@ -41,8 +41,8 @@ def main(argv=None):
             rows.append(row(i, "variada_ausente", READING_SYSTEM, f"Trecho: {other}\nPergunta: {x['question']}",
                             r.choice(NO_DATA)))
     sys.path.insert(0, str(KATSU.parent / "ARANDU/scripts"))
-    from katsu_bpe import KatsuBpe
-    tok = KatsuBpe.load(TOKENIZER)
+    from katu_bpe import KatuBpe
+    tok = KatuBpe.load(TOKENIZER)
     before = len(rows)
     rows = [x for x in rows if fits(tok, x)]
     too_long = before - len(rows)

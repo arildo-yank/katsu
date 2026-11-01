@@ -12,7 +12,7 @@ import effective_dimension as ed
 CONFIG = {"vocab_size": 20, "block_size": 8, "embed_dim": 8, "layers": 2, "heads": 2, "parameters": 0}
 
 
-# Escritor independente do formato KATSUCK1 (o mesmo de save_params em katsu-core).
+# Escritor independente do formato KATSUCK1 (o mesmo de save_params em katu-core).
 def write_checkpoint(path, tensors):
     with Path(path).open("wb") as file:
         file.write(b"KATSUCK1" + struct.pack("<Q", len(tensors)))
