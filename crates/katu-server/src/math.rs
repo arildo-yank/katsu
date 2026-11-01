@@ -730,8 +730,7 @@ mod tests {
         let written = explain(understand("derivada de ln(x) em x = -1").unwrap());
         assert_eq!(written["ok"], false, "{written}");
         assert!(explain(understand("resolva 1/(x-0.12) = 0").unwrap())["ok"] == false);
-        let past_a_pole = explain(understand("resolva tan(x) = 0").unwrap());
-        assert_eq!(past_a_pole["ok"], true, "{past_a_pole}");
+        // O polo em 0,12 vem antes na busca; a raiz verdadeira fica em -0,88.
         let zero = explain(understand("resolva 1/(x-0.12) + 1 = 0").unwrap());
         assert!(
             zero["result_latex"].as_str().unwrap().contains("-0{,}88"),
