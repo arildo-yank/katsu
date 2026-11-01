@@ -3,8 +3,8 @@
 use axum::{extract::rejection::JsonRejection, http::StatusCode, Json};
 use katu_math::linalg::{self, Matrix};
 use katu_math::{
-    antiderivative, bisect, diff, eval, integrate, latex, newton, parse, rk4, understand, Expr,
-    Intent, Vars,
+    antiderivative, bisect, derivative_at, diff, eval, exact_value, integrate, latex, newton,
+    parse, rk4, understand, Expr, Intent, Vars,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -13,6 +13,8 @@ use std::{collections::HashMap, time::Instant};
 const MAX_ODE_STEPS: usize = 100_000;
 const DEFAULT_TOL: f64 = 1e-9;
 const MIN_TOL: f64 = 1e-12;
+const ROUNDING: &str =
+    "Calculado em ponto flutuante; as últimas casas podem ter erro de arredondamento.";
 
 #[derive(Deserialize)]
 #[serde(tag = "op", rename_all = "lowercase", deny_unknown_fields)]
@@ -173,7 +175,7 @@ fn tex_matrix(m: &Matrix) -> String {
 
 /// Resultado de álgebra linear: ponto flutuante, por isso marcado como aproximado.
 fn linear(op: &str, input: String, result: Value, tex: String, method: &str) -> Value {
-    json!({"op": op, "input": input.clone(), "input_latex": input, "result": result, "result_latex": tex, "method": method, "approximate": true, "note": "Calculado em ponto flutuante; as últimas casas podem ter erro de arredondamento."})
+    json!({"op": op, "input": input.clone(), "input_latex": input, "result": result, "result_latex": tex, "method": method, "approximate": true, "note": ROUNDING})
 }
 
 fn solve(req: Request) -> Result<Value, String> {
@@ -231,22 +233,26 @@ fn solve(req: Request) -> Result<Value, String> {
         }
         Request::Eval { expr, vars } => {
             let e = expression(&expr)?;
-            let value = eval(&e, &vars.into_iter().collect())?;
+            let vars: Vars = vars.into_iter().collect();
+            let value = eval(&e, &vars)?;
+            let exact = exact_value(&e, &vars);
             Ok(answer(
                 &e,
                 "eval",
                 json!(value),
                 "Avaliação direta",
-                false,
-                String::new(),
+                !exact,
+                if exact {
+                    String::new()
+                } else {
+                    ROUNDING.to_owned()
+                },
             ))
         }
         Request::Derive { expr, var, at } => {
             let e = expression(&expr)?;
             let d = diff(&e, &var)?;
-            let value = at
-                .map(|x| eval(&d, &Vars::from([(var.clone(), x)])))
-                .transpose()?;
+            let value = at.map(|x| derivative_at(&e, &var, x, &none)).transpose()?;
             let mut out = answer(
                 &e,
                 "derive",
@@ -256,6 +262,11 @@ fn solve(req: Request) -> Result<Value, String> {
                 format!("Em relação a {var}."),
             );
             out["value_at"] = json!(value);
+            // `approximate` fala da derivada simbólica; o valor no ponto é outra conta.
+            if let Some(x) = at {
+                let env = Vars::from([(var.clone(), x)]);
+                out["value_at_approximate"] = json!(!exact_value(&d, &env));
+            }
             let mut steps = Vec::new();
             for (minus, term) in terms(&e) {
                 let sign = if minus { "-" } else { "" };
@@ -405,7 +416,11 @@ fn explain(intent: Intent) -> Value {
     let (understood, result): (String, Result<(String, bool, String), String>) = match intent {
         Intent::Calculate(e) => (
             latex(&e),
-            eval(&e, &Vars::new()).map(|v| (number_latex(v), false, String::new())),
+            eval(&e, &Vars::new()).map(|v| {
+                let exact = exact_value(&e, &Vars::new());
+                let note = if exact { "" } else { ROUNDING };
+                (number_latex(v), !exact, note.to_owned())
+            }),
         ),
         Intent::Antiderivative { expr, var } => (
             format!("\\int {}\\,d{var}", wrapped(&expr)),
@@ -443,7 +458,7 @@ fn explain(intent: Intent) -> Value {
                 let base = latex(&d);
                 match at {
                     None => Ok((base, false, String::new())),
-                    Some(x) => eval(&d, &Vars::from([(var.clone(), x)])).map(|v| {
+                    Some(x) => derivative_at(&expr, &var, x, &Vars::new()).map(|v| {
                         (
                             format!(
                                 "{base} \\quad\\text{{; em }} {var} = {} \\text{{: }} {}",
@@ -668,5 +683,58 @@ mod tests {
         ] {
             assert!(run(bad.clone()).is_err(), "{bad} deveria falhar");
         }
+    }
+
+    /// Determinístico não é exato: o rótulo só diz exato quando nada arredondou.
+    #[test]
+    fn labels_say_what_was_rounded() {
+        let exact = run(json!({"op":"eval","expr":"(12 + 8) * 3"})).unwrap();
+        assert_eq!(exact["approximate"], false);
+        assert_eq!(exact["note"], "");
+        let rounded = run(json!({"op":"eval","expr":"0.1 + 0.2"})).unwrap();
+        assert_eq!(rounded["approximate"], true);
+        assert_eq!(rounded["note"], ROUNDING);
+        let derive = run(json!({"op":"derive","expr":"x^2","at":3})).unwrap();
+        assert_eq!(derive["approximate"], false);
+        assert_eq!(derive["value_at_approximate"], false);
+        let derive = run(json!({"op":"derive","expr":"sin(x)","at":3})).unwrap();
+        assert_eq!(derive["approximate"], false);
+        assert_eq!(derive["value_at_approximate"], true);
+        assert!(run(json!({"op":"derive","expr":"x^2"}))
+            .unwrap()
+            .get("value_at_approximate")
+            .is_none());
+        assert_eq!(
+            explain(understand("calcule 1/3").unwrap())["approximate"],
+            true
+        );
+    }
+
+    /// As reproduções da auditoria, pelo mesmo caminho que o Arandu usa.
+    #[test]
+    fn audit_reproductions_stay_fixed() {
+        assert!(run(json!({"op":"root","expr":"1/(x-0.1)","from":0,"to":1})).is_err());
+        assert!(run(json!({"op":"derive","expr":"ln(x)","at":-1})).is_err());
+        let ok = run(json!({"op":"derive","expr":"ln(x)","at":2})).unwrap();
+        assert_eq!(ok["value_at"], 0.5);
+        let free = run(json!({"op":"derive","expr":"x^2 + y","at":3})).unwrap();
+        assert_eq!(free["value_at"], 6.0);
+        assert_eq!(
+            run(json!({"op":"derive","expr":"ln(x)"})).unwrap()["result"],
+            "1 / x"
+        );
+        let det = run(json!({"op":"det","a":[[1e13,0],[0,1]]})).unwrap();
+        assert_eq!(det["result"], 1e13);
+        let small = run(json!({"op":"antiderivative","expr":"0.0000000001*x"})).unwrap();
+        assert_ne!(small["result"], "0 + C");
+        let written = explain(understand("derivada de ln(x) em x = -1").unwrap());
+        assert_eq!(written["ok"], false, "{written}");
+        assert!(explain(understand("resolva 1/(x-0.12) = 0").unwrap())["ok"] == false);
+        // O polo em 0,12 vem antes na busca; a raiz verdadeira fica em -0,88.
+        let zero = explain(understand("resolva 1/(x-0.12) + 1 = 0").unwrap());
+        assert!(
+            zero["result_latex"].as_str().unwrap().contains("-0{,}88"),
+            "{zero}"
+        );
     }
 }

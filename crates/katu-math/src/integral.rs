@@ -6,10 +6,15 @@ use Expr::{Add, Call, Div, Mul, Neg, Num, Pow, Sub, Var};
 const UNKNOWN: &str = "ainda não sei escrever essa primitiva em forma fechada; com limites, a integral numérica funciona";
 
 /// Fração simples, para escrever x^4 / 4 em vez de 0.25 * x^4.
+/// A folga é relativa e cobre só o arredondamento: coeficiente pequeno não vira zero, nem 0.3000000001 vira 3/10.
 fn fraction(c: f64) -> Option<(i64, i64)> {
+    if c == 0.0 {
+        return Some((0, 1));
+    }
     (1..=1000i64).find_map(|q| {
         let p = c * q as f64;
-        ((p - p.round()).abs() < 1e-9 && p.abs() < 1e12).then_some((p.round() as i64, q))
+        let r = p.round();
+        (r != 0.0 && (p - r).abs() <= 1e-14 * r.abs() && r.abs() < 1e12).then_some((r as i64, q))
     })
 }
 
@@ -129,7 +134,17 @@ pub(super) fn free_names(e: &Expr, out: &mut Vec<String>) {
     }
 }
 
-/// Deriva a primitiva e compara com a função em vários pontos. Sem isto, um erro de regra sairia como resposta.
+/// Maior soma de valores absolutos dos termos: a escala do arredondamento quando os termos se cancelam.
+fn magnitude(e: &Expr, vars: &Vars) -> Result<f64, String> {
+    match e {
+        Add(a, c) | Sub(a, c) => Ok(magnitude(a, vars)? + magnitude(c, vars)?),
+        Neg(a) => magnitude(a, vars),
+        other => eval(other, vars).map(f64::abs),
+    }
+}
+
+/// Deriva a primitiva e compara com a função em vários pontos. Sem isto, um erro de regra sairia como
+/// resposta. A folga é relativa à escala da própria função, sem parte absoluta: 1e-10 * x não passa por zero.
 fn confirm(e: &Expr, primitive: &Expr, var: &str) -> Result<(), String> {
     let d = diff(primitive, var)?;
     let mut names = Vec::new();
@@ -141,7 +156,8 @@ fn confirm(e: &Expr, primitive: &Expr, var: &str) -> Result<(), String> {
             .map(|n| (n.clone(), if n == var { x } else { 1.3 }))
             .collect();
         if let (Ok(want), Ok(got)) = (eval(e, &vars), eval(&d, &vars)) {
-            if (want - got).abs() > 1e-7 * (1.0 + want.abs()) {
+            let scale = magnitude(e, &vars)?.max(magnitude(&d, &vars)?);
+            if (want - got).abs() > 1e-7 * scale {
                 return Err("a primitiva não passou na conferência; prefiro não responder".into());
             }
             checked += 1;
@@ -230,5 +246,45 @@ mod tests {
         ] {
             assert!(primitive(text).is_err(), "{text} deveria ser recusada");
         }
+    }
+
+    /// Coeficiente pequeno não é zero: nem na fração, nem na conferência.
+    #[test]
+    fn small_coefficients_survive() {
+        for (text, c) in [
+            ("0.0000000001*x", 1e-10),
+            ("0.000000000000001*x", 1e-15),
+            ("0.0000000001*x + 0.0000000002*x", 3e-10),
+            ("x / 10000000000", 1e-10),
+        ] {
+            let e = parse(text).unwrap();
+            let p = antiderivative(&e, "x").unwrap_or_else(|why| panic!("{text}: {why}"));
+            let got = eval(&p, &Vars::from([("x".to_owned(), 2.0)])).unwrap();
+            let want = c * 2.0;
+            assert!((got - want).abs() <= 1e-12 * want, "{text} -> {p} = {got}");
+        }
+        assert_eq!(primitive("0.25*x^3").unwrap(), "x^4 / 16");
+        assert_eq!(primitive("0*x").unwrap(), "0");
+    }
+
+    /// Valor quase igual a uma fração simples não é arredondado para ela.
+    #[test]
+    fn near_fractions_keep_their_value() {
+        assert_eq!(fraction(0.3000000001), None);
+        assert_eq!(fraction(0.1 + 0.2), Some((3, 10)));
+        assert_eq!(fraction(1.0 / 3.0), Some((1, 3)));
+        assert_eq!(fraction(0.0), Some((0, 1)));
+        assert_eq!(fraction(1e-10), None);
+    }
+
+    #[test]
+    fn confirmation_catches_a_wrong_primitive_at_any_scale() {
+        let e = parse("0.0000000001*x").unwrap();
+        assert!(confirm(&e, &Num(0.0), "x").is_err());
+        assert!(confirm(&e, &parse("0.00000000011*x^2/2").unwrap(), "x").is_err());
+        assert!(confirm(&e, &parse("0.0000000001*x^2/2").unwrap(), "x").is_ok());
+        // Cancelamento: a função zera num ponto de teste e a conferência não pode recusar por arredondamento.
+        assert!(antiderivative(&parse("x - 0.37").unwrap(), "x").is_ok());
+        assert!(antiderivative(&parse("1000000*x - 370000").unwrap(), "x").is_ok());
     }
 }

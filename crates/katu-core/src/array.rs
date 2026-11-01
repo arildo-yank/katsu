@@ -461,12 +461,15 @@ pub struct NdArray {
     offset: usize,
 }
 
+/// Elementos da forma. Como no NumPy, o limite ignora os zeros: os passos de um array vazio também
+/// precisam caber em `isize`.
 fn element_count(shape: &[usize]) -> Result<usize, ArrayError> {
     shape
         .iter()
-        .try_fold(1usize, |n, &d| n.checked_mul(d))
+        .try_fold(1usize, |n, &d| n.checked_mul(d.max(1)))
         .filter(|&n| n <= isize::MAX as usize)
-        .ok_or(ArrayError::Overflow)
+        .ok_or(ArrayError::Overflow)?;
+    Ok(shape.iter().product())
 }
 
 fn c_strides(shape: &[usize]) -> Vec<isize> {
@@ -773,6 +776,7 @@ impl NdArray {
                 _ => return Err(error()),
             };
         }
+        element_count(shape)?;
         Ok(NdArray {
             data: self.data.clone(),
             shape: shape.to_vec(),
@@ -1097,7 +1101,10 @@ impl NdArray {
             fronts.push(front);
         }
         let mut shape = fronts[0].shape.clone();
-        shape[0] = fronts.iter().map(|f| f.shape[0]).sum();
+        shape[0] = fronts
+            .iter()
+            .try_fold(0usize, |n, f| n.checked_add(f.shape[0]))
+            .ok_or(ArrayError::Overflow)?;
         let joined = with_type!(dtype, T => {
             let values: Vec<T> = fronts.iter().flat_map(|f| f.values_as::<T>()).collect();
             Self::from_vec(values, &shape)?

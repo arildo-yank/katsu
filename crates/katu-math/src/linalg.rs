@@ -44,30 +44,79 @@ fn finite(value: f64) -> Result<f64, String> {
     }
 }
 
-/// Maior valor absoluto, a referência de escala para dizer que um pivô é zero.
-fn scale(a: &Matrix) -> f64 {
-    a.iter().flatten().fold(0.0f64, |m, v| m.max(v.abs()))
+/// v * 2^e em passos, sem estourar no meio quando o resultado cabe. Potência de 2 não arredonda.
+fn ldexp(mut v: f64, mut e: i64) -> f64 {
+    const STEP: i64 = 1000;
+    e = e.clamp(-8 * STEP, 8 * STEP);
+    while e > STEP {
+        v *= 2f64.powi(STEP as i32);
+        e -= STEP;
+    }
+    while e < -STEP {
+        v *= 2f64.powi(-STEP as i32);
+        e += STEP;
+    }
+    v * 2f64.powi(e as i32)
 }
 
-/// Eliminação de Gauss com pivoteamento parcial.
+/// Expoente de base 2 do maior valor absoluto; 0 quando tudo é zero.
+fn exponent(values: impl Iterator<Item = f64>) -> i64 {
+    let top = values.fold(0.0f64, |m, v| m.max(v.abs()));
+    if top == 0.0 {
+        0
+    } else {
+        top.log2().floor() as i64
+    }
+}
+
+/// Matriz com linhas e colunas de tamanho próximo de 1, e os expoentes retirados: A[i][j] = M[i][j] *
+/// 2^(linha[i] + coluna[j]). Dizer que um pivô é zero só faz sentido nessa escala: diag(1e13, 1) não é
+/// quase singular, só tem linhas de tamanhos diferentes.
+fn balanced(a: &Matrix) -> (Matrix, Vec<i64>, Vec<i64>) {
+    let n = a.len();
+    let rows: Vec<i64> = a.iter().map(|r| exponent(r.iter().copied())).collect();
+    let mut m: Matrix = a
+        .iter()
+        .zip(&rows)
+        .map(|(r, e)| r.iter().map(|v| ldexp(*v, -e)).collect())
+        .collect();
+    let cols: Vec<i64> = (0..n).map(|j| exponent(m.iter().map(|r| r[j]))).collect();
+    for row in &mut m {
+        for (v, e) in row.iter_mut().zip(&cols) {
+            *v = ldexp(*v, -e);
+        }
+    }
+    (m, rows, cols)
+}
+
+fn best_pivot(m: &Matrix, col: usize) -> usize {
+    (col..m.len())
+        .max_by(|&i, &j| m[i][col].abs().total_cmp(&m[j][col].abs()))
+        .unwrap_or(col)
+}
+
+/// Eliminação de Gauss com pivoteamento parcial, na matriz balanceada. Zero só quando o pivô é
+/// indistinguível do arredondamento; determinante muito pequeno, mas distinguível, sai como valor. O que
+/// não cabe em f64 é recusado.
 #[allow(clippy::needless_range_loop)]
 pub fn det(a: &Matrix) -> Result<f64, String> {
     let n = square(a)?;
-    let tiny = SINGULAR * scale(a);
-    let mut m = a.clone();
-    let mut value = 1.0;
+    let (mut m, rows, cols) = balanced(a);
+    let tiny = 8.0 * n as f64 * f64::EPSILON;
+    let (mut mantissa, mut power) = (1.0f64, rows.iter().chain(&cols).sum::<i64>());
     for col in 0..n {
-        let pivot = (col..n)
-            .max_by(|&i, &j| m[i][col].abs().total_cmp(&m[j][col].abs()))
-            .unwrap_or(col);
+        let pivot = best_pivot(&m, col);
         if m[pivot][col].abs() <= tiny {
             return Ok(0.0);
         }
         if pivot != col {
             m.swap(pivot, col);
-            value = -value;
+            mantissa = -mantissa;
         }
-        value *= m[col][col];
+        mantissa *= m[col][col];
+        let shift = exponent(std::iter::once(mantissa));
+        mantissa = ldexp(mantissa, -shift);
+        power += shift;
         for row in col + 1..n {
             let factor = m[row][col] / m[col][col];
             for k in col..n {
@@ -75,14 +124,18 @@ pub fn det(a: &Matrix) -> Result<f64, String> {
             }
         }
     }
-    finite(value)
+    let value = finite(ldexp(mantissa, power))?;
+    if value.abs() < f64::MIN_POSITIVE {
+        return Err("o determinante é pequeno demais para ponto flutuante".into());
+    }
+    Ok(value)
 }
 
-/// Gauss-Jordan com pivoteamento parcial. Matriz singular, ou quase, é erro.
+/// Gauss-Jordan com pivoteamento parcial, na matriz balanceada. Matriz singular, ou quase, é erro.
 pub fn inverse(a: &Matrix) -> Result<Matrix, String> {
     let n = square(a)?;
-    let tiny = SINGULAR * scale(a);
-    let mut m: Matrix = a
+    let (balanced, rows, cols) = balanced(a);
+    let mut m: Matrix = balanced
         .iter()
         .enumerate()
         .map(|(i, row)| {
@@ -92,10 +145,8 @@ pub fn inverse(a: &Matrix) -> Result<Matrix, String> {
         })
         .collect();
     for col in 0..n {
-        let pivot = (col..n)
-            .max_by(|&i, &j| m[i][col].abs().total_cmp(&m[j][col].abs()))
-            .unwrap_or(col);
-        if m[pivot][col].abs() <= tiny {
+        let pivot = best_pivot(&m, col);
+        if m[pivot][col].abs() <= SINGULAR {
             return Err("a matriz é singular: não tem inversa".into());
         }
         m.swap(pivot, col);
@@ -112,9 +163,18 @@ pub fn inverse(a: &Matrix) -> Result<Matrix, String> {
             }
         }
     }
-    let out: Matrix = m.into_iter().map(|row| row[n..].to_vec()).collect();
-    if out.iter().flatten().any(|v| !v.is_finite()) {
-        return Err("resultado não finito".into());
+    // A = R M C, logo a inversa é C⁻¹ M⁻¹ R⁻¹.
+    let mut out = Matrix::with_capacity(n);
+    for (i, row) in m.iter().enumerate() {
+        let mut line = Vec::with_capacity(n);
+        for (j, v) in row[n..].iter().enumerate() {
+            let value = finite(ldexp(*v, -cols[i] - rows[j]))?;
+            if value == 0.0 && *v != 0.0 {
+                return Err("a inversa tem valor pequeno demais para ponto flutuante".into());
+            }
+            line.push(value);
+        }
+        out.push(line);
     }
     Ok(out)
 }
@@ -236,5 +296,79 @@ mod tests {
         assert!(dot(&[1.0], &[1.0, 2.0]).is_err());
         assert!(cross(&[1.0, 2.0], &[3.0, 4.0]).is_err());
         assert!(det(&vec![vec![0.0; 65]; 65]).is_err(), "grande demais");
+    }
+
+    fn relative(a: f64, c: f64) {
+        assert!((a - c).abs() <= 1e-12 * c.abs(), "{a} != {c}");
+    }
+
+    /// Escala não é singularidade: as linhas podem diferir em muitas ordens de grandeza.
+    #[test]
+    fn determinant_is_not_fooled_by_scale() {
+        relative(det(&vec![vec![1e13, 0.0], vec![0.0, 1.0]]).unwrap(), 1e13);
+        relative(det(&vec![vec![1.0, 0.0], vec![0.0, 1e13]]).unwrap(), 1e13);
+        relative(det(&vec![vec![1e-13, 0.0], vec![0.0, 1.0]]).unwrap(), 1e-13);
+        relative(
+            det(&vec![vec![1e100, 0.0], vec![0.0, 1e-100]]).unwrap(),
+            1.0,
+        );
+        relative(
+            det(&vec![
+                vec![1e200, 0.0, 0.0],
+                vec![0.0, 1e200, 0.0],
+                vec![0.0, 0.0, 1e-300],
+            ])
+            .unwrap(),
+            1e100,
+        );
+        relative(det(&vec![vec![1e13, 2e13], vec![3.0, 4.0]]).unwrap(), -2e13);
+        relative(
+            det(&vec![vec![1.0, 1.0], vec![1.0, 1.0 + 1e-10]]).unwrap(),
+            1e-10 * 1.000000082740371,
+        );
+    }
+
+    #[test]
+    fn determinant_of_singular_matrices_is_zero_at_any_scale() {
+        assert_eq!(det(&vec![vec![0.0; 3]; 3]).unwrap(), 0.0);
+        assert_eq!(
+            det(&vec![
+                vec![1.0, 2.0, 3.0],
+                vec![4.0, 5.0, 6.0],
+                vec![7.0, 8.0, 9.0],
+            ])
+            .unwrap(),
+            0.0
+        );
+        assert_eq!(det(&vec![vec![1e13, 2e13], vec![2e13, 4e13]]).unwrap(), 0.0);
+        assert_eq!(det(&vec![vec![1e-13, 2e-13], vec![1.0, 2.0]]).unwrap(), 0.0);
+        assert_eq!(det(&vec![vec![1.0, 0.0], vec![0.0, 0.0]]).unwrap(), 0.0);
+    }
+
+    /// O que não cabe em f64 é recusado, nunca devolvido como zero ou infinito.
+    #[test]
+    fn determinant_refuses_what_a_double_cannot_hold() {
+        assert!(det(&vec![vec![1e-200, 0.0], vec![0.0, 1e-200]]).is_err());
+        assert!(det(&vec![vec![1e200, 0.0], vec![0.0, 1e200]]).is_err());
+    }
+
+    #[test]
+    fn inverse_is_not_fooled_by_scale() {
+        let out = inverse(&vec![vec![1e13, 0.0], vec![0.0, 1.0]]).unwrap();
+        relative(out[0][0], 1e-13);
+        relative(out[1][1], 1.0);
+        let a = vec![vec![1e13, 1.0], vec![1.0, 1.0]];
+        let product = multiply(&a, &inverse(&a).unwrap()).unwrap();
+        for (i, row) in product.iter().enumerate() {
+            for (j, v) in row.iter().enumerate() {
+                let want = if i == j { 1.0 } else { 0.0 };
+                assert!((v - want).abs() < 1e-9, "{v} != {want}");
+            }
+        }
+        assert!(inverse(&vec![vec![1e13, 2e13], vec![2e13, 4e13]]).is_err());
+        assert!(
+            inverse(&vec![vec![1.0, 1.0], vec![1.0, 1.0 + 1e-15]]).is_err(),
+            "quase singular"
+        );
     }
 }
