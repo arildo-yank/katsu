@@ -2,8 +2,8 @@
 //! Só cobre o que fecha em racionais: soma, produto, divisão e potência inteira. Raiz, pi, seno e logaritmo
 //! continuam em f64 e são recusados aqui. Tamanho arbitrário não é tamanho infinito: passar de [`MAX_BITS`]
 //! é recusa, estimada antes de calcular sempre que dá. Contrato em `docs/KATU_CONTRATO_RESULTADOS.md`.
-use crate::{fail, ErrorCode, Func, MathError};
-use std::{cmp::Ordering, fmt};
+use crate::{budget, fail, ErrorCode, Func, MathError};
+use std::{cmp::Ordering, collections::HashMap, fmt};
 
 /// Limite por inteiro. Ajustável depois de medir; ver o relatório.
 pub const MAX_BITS: u64 = 262_144;
@@ -323,6 +323,7 @@ impl Int {
         let mut base = self.clone();
         let mut left = exponent;
         loop {
+            budget::check()?;
             if left & 1 == 1 {
                 result = result.mul(&base)?;
             }
@@ -334,14 +335,16 @@ impl Int {
         }
     }
 
-    pub fn gcd(&self, other: &Self) -> Self {
+    /// Máximo divisor comum. É a operação mais cara daqui: confere o prazo a cada passo.
+    pub fn gcd(&self, other: &Self) -> Result<Self, MathError> {
         let (mut a, mut b) = (self.mag.clone(), other.mag.clone());
         while !b.is_empty() {
+            budget::check()?;
             let (_, r) = mag_divrem(&a, &b);
             a = b;
             b = r;
         }
-        Self { neg: false, mag: a }
+        Ok(Self { neg: false, mag: a })
     }
 
     fn to_u64(&self) -> Option<u64> {
@@ -420,7 +423,7 @@ impl Rational {
         if den.is_zero() {
             return fail(ErrorCode::DivisionByZero, "divisão por zero");
         }
-        let common = num.gcd(&den);
+        let common = num.gcd(&den)?;
         let (mut num, _) = num.div_rem(&common)?;
         let (mut den, _) = den.div_rem(&common)?;
         if den.is_negative() {
@@ -656,6 +659,14 @@ impl fmt::Display for Rational {
 /// Avalia uma expressão só com números, `+ - * / ^`, parênteses e `abs`, sem arredondar. A precedência é a
 /// mesma de [`crate::parse`]. O que não fecha em racionais é recusado, nunca aproximado.
 pub fn exact_eval(text: &str) -> Result<Rational, MathError> {
+    exact_eval_with(text, &HashMap::new())
+}
+
+/// [`exact_eval`] com valores exatos para as variáveis. `pi` e `e` continuam constantes, como em [`crate::parse`].
+pub fn exact_eval_with(
+    text: &str,
+    vars: &HashMap<String, Rational>,
+) -> Result<Rational, MathError> {
     if text.trim().is_empty() {
         return fail(ErrorCode::ParseError, "expressão vazia ou longa demais");
     }
@@ -666,6 +677,7 @@ pub fn exact_eval(text: &str) -> Result<Rational, MathError> {
         s: text.as_bytes(),
         i: 0,
         depth: 0,
+        vars,
     };
     let value = p.sum()?;
     p.space();
@@ -682,6 +694,7 @@ struct Exact<'a> {
     s: &'a [u8],
     i: usize,
     depth: usize,
+    vars: &'a HashMap<String, Rational>,
 }
 
 fn unavailable<T>(what: &str) -> Result<T, MathError> {
@@ -805,10 +818,13 @@ impl Exact<'_> {
         }
         match name {
             "pi" | "e" => unavailable(name),
-            _ => fail(
-                ErrorCode::MissingVariable,
-                format!("variável sem valor: {name}"),
-            ),
+            _ => match self.vars.get(name) {
+                Some(value) => Ok(value.clone()),
+                None => fail(
+                    ErrorCode::MissingVariable,
+                    format!("variável sem valor: {name}"),
+                ),
+            },
         }
     }
     fn number(&mut self) -> Result<Rational, MathError> {
@@ -888,6 +904,21 @@ mod tests {
         assert_eq!(code("0^-1"), ErrorCode::DivisionByZero);
         assert_eq!(code("sqrt(2)"), ErrorCode::ExactModeUnavailable);
         assert_eq!(code("2^(10^9)"), ErrorCode::LimitSize);
+    }
+
+    #[test]
+    fn variables_keep_their_exact_value() {
+        let vars = HashMap::from([
+            ("a".to_owned(), Rational::parse("1/3").unwrap()),
+            ("x".to_owned(), Rational::parse("0.1").unwrap()),
+        ]);
+        let got = exact_eval_with("a + x * 2", &vars).unwrap();
+        assert_eq!(got.to_string(), "8/15");
+        let missing = exact_eval_with("a + y", &vars).unwrap_err();
+        assert_eq!(missing.code, ErrorCode::MissingVariable);
+        let vars = HashMap::from([("pi".to_owned(), Rational::parse("3").unwrap())]);
+        let pi = exact_eval_with("pi", &vars).unwrap_err();
+        assert_eq!(pi.code, ErrorCode::ExactModeUnavailable);
     }
 
     #[test]
@@ -997,7 +1028,7 @@ mod tests {
                 assert_eq!(a.div(&b).unwrap().mul(&b).unwrap(), a);
             }
             let sum = a.add(&b).unwrap();
-            assert_eq!(sum.numerator().gcd(sum.denominator()), Int::one());
+            assert_eq!(sum.numerator().gcd(sum.denominator()).unwrap(), Int::one());
             assert!(!sum.denominator().is_negative());
             assert_eq!(a.cmp(&b), a.sub(&b).unwrap().numerator().cmp(&Int::zero()));
         }

@@ -22,6 +22,9 @@ pub enum ErrorCode {
     LimitSize,
     LimitDepth,
     LimitEvaluations,
+    LimitTime,
+    LimitConcurrency,
+    Cancelled,
 }
 
 impl ErrorCode {
@@ -44,6 +47,9 @@ impl ErrorCode {
             ErrorCode::LimitSize => "limit_size",
             ErrorCode::LimitDepth => "limit_depth",
             ErrorCode::LimitEvaluations => "limit_evaluations",
+            ErrorCode::LimitTime => "limit_time",
+            ErrorCode::LimitConcurrency => "limit_concurrency",
+            ErrorCode::Cancelled => "cancelled",
         }
     }
 
@@ -63,9 +69,26 @@ impl ErrorCode {
             | ErrorCode::NearSingularMatrix
             | ErrorCode::NotRepresentable
             | ErrorCode::VerificationFailed => "inconclusive",
-            ErrorCode::LimitSize | ErrorCode::LimitDepth | ErrorCode::LimitEvaluations => {
-                "resource_limit"
-            }
+            ErrorCode::LimitSize
+            | ErrorCode::LimitDepth
+            | ErrorCode::LimitEvaluations
+            | ErrorCode::LimitTime
+            | ErrorCode::LimitConcurrency
+            | ErrorCode::Cancelled => "resource_limit",
+        }
+    }
+}
+
+impl ErrorCode {
+    /// Qual limite foi atingido, para `usage.limit_hit`.
+    pub fn limit(self) -> Option<&'static str> {
+        match self {
+            ErrorCode::LimitSize => Some("size"),
+            ErrorCode::LimitDepth => Some("depth"),
+            ErrorCode::LimitEvaluations => Some("evaluations"),
+            ErrorCode::LimitTime => Some("time"),
+            ErrorCode::LimitConcurrency => Some("concurrency"),
+            _ => None,
         }
     }
 }

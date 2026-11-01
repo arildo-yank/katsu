@@ -52,7 +52,9 @@ fn main() {
             .unwrap()
     });
     medir("exato: divisão", 3, || grande.div_rem(&outro).unwrap());
-    medir("exato: mdc, pior caso prático", 1, || grande.gcd(&outro));
+    medir("exato: mdc, pior caso prático", 1, || {
+        grande.gcd(&outro).unwrap()
+    });
     medir("exato: racional reduzido", 1, || {
         Rational::new(grande.clone(), outro.clone()).unwrap()
     });

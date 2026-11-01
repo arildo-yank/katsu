@@ -8,6 +8,7 @@
 
 use std::{collections::HashMap, fmt};
 
+pub mod budget;
 mod error;
 pub mod exact;
 mod integral;
@@ -15,7 +16,7 @@ mod latex;
 pub mod linalg;
 mod prompt;
 pub use error::{ErrorCode, MathError};
-pub use exact::{exact_eval, Int, Rational};
+pub use exact::{exact_eval, exact_eval_with, Int, Rational};
 pub use integral::antiderivative;
 pub use latex::latex;
 pub use prompt::{understand, Intent};
@@ -23,6 +24,8 @@ pub use prompt::{understand, Intent};
 const MAX_LEN: usize = 500;
 const MAX_DEPTH: usize = 48;
 const MAX_INTEGRAL_CALLS: usize = 2_000_000;
+/// De quantas em quantas avaliações os laços numéricos conferem o prazo.
+const BUDGET_EVERY: usize = 4096;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Func {
@@ -602,6 +605,9 @@ pub fn integrate(
     let calls = std::cell::Cell::new(0usize);
     let f = |x: f64| {
         calls.set(calls.get() + 1);
+        if calls.get() % BUDGET_EVERY == 1 {
+            budget::check()?;
+        }
         if calls.get() > MAX_INTEGRAL_CALLS {
             return fail(
                 ErrorCode::LimitEvaluations,
@@ -747,6 +753,9 @@ pub fn rk4(
     let h = (t1 - t0) / steps as f64;
     let (mut tv, mut yv) = (t0, y0);
     for i in 0..steps {
+        if i % BUDGET_EVERY == 0 {
+            budget::check()?;
+        }
         let k1 = call(tv, yv)?;
         let k2 = call(tv + h / 2.0, yv + h * k1 / 2.0)?;
         let k3 = call(tv + h / 2.0, yv + h * k2 / 2.0)?;

@@ -14,7 +14,7 @@ recorte das fases 3 a 6, com aritmética exata, álgebra básica, cálculo já s
 | C1 | **Pendente de revisão humana.** C2 e C3 aplicam o contrato como versão provisória |
 | A7 | Feita e instalada |
 | C2, C3 | Feitas e integradas, sem consumidor ainda; o Arandu segue em `/math` |
-| C4, C5 | Feitas em `feat/motor-exato`, sem rota: `katu_math::exact` |
+| C4, C5, C7, C8 | Feitas em `feat/motor-exato`, ainda sem integrar: `katu_math::exact`, `katu_math::budget`, modos em `/v1/compute`. C7 só em `eval`; C8 sem teto de memória |
 
 Medido neste ciclo: cerca de 10 minutos de relógio, com um agente assistido, e cerca de 1.140 linhas alteradas entre código,
 testes e script. Estimado para o ciclo, nas faixas abaixo: B1 e B4 P, C2 e C3 M, cerca de 5 a 10 dias de uma pessoa. A diferença não
@@ -66,8 +66,8 @@ fim de cada ciclo, comparando com o previsto. Nenhuma tarefa daqui pede GPU, tre
 | C4 | Feita. `Int` próprio: soma, produto, divisão, potência e texto | | G | Propriedades e comparação com Python | Desempenho e erros sutis de divisão |
 | C5 | Feita, sem unidades. `Rational` e literal decimal exato | C4 | M | Gabaritos da seção 8 | Crescimento de denominadores |
 | C6 | AST numérica: `Expr::Num(f64)` mantendo o literal original | C5 | G | Consumidores sem mudança | Maior risco de compatibilidade do marco |
-| C7 | Modos `exact`, `numeric`, `auto` e política de conversão | C3, C6 | M | Nenhuma promoção silenciosa em testes de propriedade | Decidir `auto` caso a caso |
-| C8 | Orçamento de recursos: tempo, memória, profundidade e cancelamento. Vem antes de C7: reduzir um racional no limite leva 1,4 s | C3 | M | Testes adversariais, `limit_*` | Cancelar laço de CPU no `spawn_blocking` |
+| C7 | Parte feita. Modos `exact`, `numeric`, `auto` e política de conversão, em `eval`; demais operações dependem de C6 | C3, C6 | M | Nenhuma promoção silenciosa em testes de propriedade | Decidir `auto` caso a caso |
+| C8 | Parte feita. Tempo, profundidade, concorrência e cancelamento em `/v1/compute`; falta teto de memória | C3 | M | Testes adversariais, `limit_*` | Cancelar laço de CPU no `spawn_blocking` |
 | C9 | Hipóteses sobre variáveis; intervalos e desigualdades | C2 | G | Testes por família | Escopo cresce; fatiar |
 | C10 | Unidades: dimensão, fatores, conversão afim | C5 | M | Gabaritos; fatores conferidos no NIST SP 811 | Temperatura e nomes em conflito com variáveis |
 | C11 | Unidades em expressões e leitura em texto | C10 | M | Casos ambíguos pedem esclarecimento | `m` e `s` são variáveis válidas hoje |
