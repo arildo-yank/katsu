@@ -7,7 +7,7 @@ Estado: proposta de planejamento. Não autoriza nem representa implementação, 
 
 Evoluir o Katu para exercer, como ferramenta de um modelo de linguagem, o papel de um motor computacional semelhante ao Wolfram Alpha: interpretar pedidos estruturados, executar cálculos, consultar dados com procedência e devolver resultados verificáveis, gráficos e explicações reproduzíveis.
 
-O foco inicial é katu-math e katu-core. O conjunto completo de requisitos recebidos inclui também conhecimento factual, dados atualizados, imagens e domínios especializados. Essas capacidades exigem componentes adjacentes; não devem ser colocadas indiscriminadamente dentro das duas bibliotecas matemáticas.
+O foco inicial é katu-math e katu-core, com a criação do katu-plot como componente próprio de gráficos modernos. O conjunto completo de requisitos recebidos inclui também conhecimento factual, dados atualizados, imagens e domínios especializados. Essas capacidades exigem componentes adjacentes; não devem ser colocadas indiscriminadamente dentro das duas bibliotecas matemáticas.
 
 Há dois marcos distintos:
 1. Motor matemático confiável para uso como ferramenta pelo Katu/Arandu.
@@ -34,6 +34,7 @@ Equivalência ampla ao Wolfram Alpha é uma direção de produto, não uma capac
 |---|---|---|
 | katu-core | Arrays, tensores, kernels, álgebra linear numérica e infraestrutura de execução | Não armazenar biografias, legislação ou dados de mercado |
 | katu-math | Expressões, números exatos, álgebra simbólica, cálculo, condições de validade, unidades e resultados matemáticos | Não usar o texto de um LLM como prova de correção |
+| katu-plot (novo; ainda não existe) | Geração e apresentação de gráficos modernos 2D/3D a partir de expressões e dados; especificação visual, geometria, interação e exportação | Usar katu-math para semântica matemática e katu-core quando necessário para cálculo; não duplicar o motor simbólico |
 | Componentes científicos adjacentes | Estatística, otimização, FFT, esparsas e algoritmos especializados | Criar módulos/crates conforme necessidade comprovada; nomes finais a definir |
 | Catálogo e provedores de dados | Entidades, fontes, versões, datas, cobertura geográfica e atualização | Separar dados curados de dados ao vivo; explicitar indisponibilidade |
 | Camada de ferramentas/servidor | Contratos, limites de recursos, coordenação e respostas estruturadas | Preservar rotas existentes; novos contratos versionados |
@@ -123,7 +124,7 @@ Portão por algoritmo: casos conhecidos, referências independentes, casos mal c
 
 Portão por família: lista de operações cobertas, condições, recusas e suíte independente. Passos devem reproduzir o resultado e declarar condições de equivalência.
 
-### Fase 5 — Gráficos e apresentação matemática
+### Fase 5 — Criar katu-plot: gráficos modernos e apresentação matemática
 
 Ordem:
 1. Funções 2D, múltiplas curvas, intervalos e escalas logarítmicas/semilogarítmicas.
@@ -131,7 +132,20 @@ Ordem:
 3. Superfícies, malhas paramétricas e curvas de nível.
 4. Equações implícitas, quádricas e regiões de inequações.
 
-O motor gera geometria e metadados; a interface renderiza. Implementar amostragem adaptativa, separação de descontinuidades, domínio das escalas e limites de resolução. Nenhum método finito de amostragem deve prometer detectar toda singularidade de uma função arbitrária.
+O katu-plot será responsável pelo sistema de gráficos, com contrato próprio e integração aos demais componentes. Seu núcleo produz a especificação visual, geometria e metadados; um renderizador apresenta o resultado no Arandu ou em outros consumidores. A escolha entre crate Rust, pacote de renderização ou combinação dos dois será definida no desenho técnico. Não presumir que todo o renderizador precise estar em Rust.
+
+Requisitos propostos para o katu-plot:
+- Aparência moderna: tipografia legível, cores consistentes, temas claro/escuro, legendas, eixos, grades e fórmulas em LaTeX.
+- Interação: zoom, deslocamento, inspeção de coordenadas, seleção de séries, rotação 3D e controles de parâmetros.
+- Exportação: SVG e PNG para gráficos compatíveis, além dos dados e da especificação reproduzível; outros formatos serão avaliados por necessidade.
+- Gráficos científicos e, em extensões posteriores, estatísticos e temporais para os domínios do catálogo.
+- Acessibilidade: contraste, distinção de séries além da cor e alternativa tabular/textual.
+- Contrato versionado para uso como ferramenta: o modelo solicita o gráfico, o katu-plot gera um artefato e o consumidor o apresenta.
+- Separar motor de dados/geometria e renderizador para permitir uso fora do Arandu.
+
+Fluxo: expressão/dados → katu-math valida e avalia → katu-core apoia os cálculos necessários → katu-plot organiza amostragem, geometria e apresentação → Arandu ou outro consumidor exibe. Nem todo gráfico precisa passar por todos esses componentes.
+
+Implementar amostragem adaptativa, separação de descontinuidades, domínio das escalas e limites de resolução. Nenhum método finito de amostragem deve prometer detectar toda singularidade de uma função arbitrária.
 
 Portão: casos visuais e numéricos conhecidos, ausência de ligações falsas nos casos de singularidade testados, unidades/eixos corretos e rastreabilidade dos parâmetros. Testar o contrato do gráfico além de sua aparência.
 
@@ -233,6 +247,11 @@ Gastos que precisam de orçamento antes de contratação: dados licenciados, pro
 2. Preparar ambiente isolado de correções, sem substituir serviços instalados.
 3. Corrigir seis falhas com regressões e validar integração matemática.
 4. Especificar contrato de resultados e o primeiro recorte de aritmética exata/unidades.
-5. Decompor o primeiro marco de produto em tarefas estimáveis.
+5. Especificar o contrato do katu-plot e seu primeiro recorte: funções 2D, múltiplas curvas, intervalos explícitos, zoom e exportação.
+6. Decompor o primeiro marco de produto em tarefas estimáveis.
 
 Este documento é o plano. Nenhuma dessas implementações foi iniciada nesta solicitação.
+
+## 10. Atualização de escopo — katu-plot
+
+Requisito explícito do usuário: criar o katu-plot, hoje inexistente, como sistema de geração de gráficos modernos. Está incluído como componente próprio e como entrega da fase 5. Os detalhes de interação, exportação e organização interna acima são propostas de planejamento, não funcionalidades já implementadas. A criação do componente não foi iniciada; esta atualização altera apenas o plano.

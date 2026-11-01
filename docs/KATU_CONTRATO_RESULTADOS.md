@@ -125,19 +125,8 @@ compatibilidade.
 `{"rule": "power_rule", "from": "x^3", "to": "x^4 / 4", "conditions": ["n != -1"]}`. Concatenar os passos precisa
 reproduzir o resultado; a suíte confere. Sem passos rastreáveis, `steps` fica vazio.
 
-**Visualização**, especificada aqui e implementada na Fase 5:
-
-```json
-{
-  "kind": "plot2d",
-  "axes": {"x": {"label": "x", "scale": "linear", "range": [0, 1], "unit": null}, "y": {"label": "f(x)", "scale": "linear", "range": [-100, 100], "unit": null}},
-  "series": [{"label": "1/(x-0.1)", "segments": [[[0.0, -10.0]], [[0.11, 100.0]]]}],
-  "breaks": [{"x": 0.1, "reason": "pole_suspected"}],
-  "sampling": {"method": "adaptive", "points": 400, "warning": "amostragem finita não detecta toda singularidade"}
-}
-```
-
-Segmentos separados são a forma de não ligar um polo com uma reta falsa. O motor gera a geometria; a interface desenha.
+**Visualização.** O contrato de gráficos é do katu-plot: [KATU_PLOT_CONTRATO.md](KATU_PLOT_CONTRATO.md). Segmentos separados
+são a forma de não ligar um polo com uma reta falsa. O núcleo gera a geometria; o renderizador a apresenta.
 
 ## 6. Primeiro recorte: aritmética exata
 

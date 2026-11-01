@@ -77,18 +77,23 @@ paridade.
 | E5 | Derivada e primitiva com coeficientes exatos; classes listadas | C6 | M | Passos reproduzem o resultado | Compatibilidade da forma impressa |
 | E6 | Registro de passos com regra e condição | C3, E5 | M | Reconstituição automática testada | Passos virarem texto solto |
 
-## Ciclo F: gráficos 2D (Fase 5, item 1)
+## Ciclo F: katu-plot, gráficos 2D (Fase 5, primeiro recorte)
 
-O plano salvo não dá nome ao componente de geometria; `katu-plot` não consta dele nem de outro documento do repositório.
-Nome e localização entram como decisão em F1.
+Contrato em [KATU_PLOT_CONTRATO.md](KATU_PLOT_CONTRATO.md). A crate ainda não existe; criá-la depende de autorização.
 
 | ID | Tarefa | Depende | Esforço | Evidência | Risco |
 |---|---|---|---|---|---|
-| F1 | Decidir componente e contrato `plot2d` | C3 | P | Decisão registrada | Baixo |
-| F2 | Amostragem adaptativa, múltiplas curvas, intervalos | F1 | M | Contagem e erro em casos conhecidos | Custo por curva |
-| F3 | Separação de descontinuidades e aviso de amostragem | F2 | M | Sem ligação falsa em `1/x`, `tan(x)`, `abs(x)/x` | Nunca prometer detectar tudo |
-| F4 | Escalas log e semilog, com domínio | F2 | P | Recusa em valor não positivo | Baixo |
-| F5 | Renderização no Arandu | F2 | M | Teste do contrato e conferência visual | Duplicar lógica matemática na interface |
+| F1 | Aprovar o contrato e decidir API e organização | C1 | P | Decisão registrada | Refazer a API |
+| F2 | Avaliar renderizadores e PNG: Plotters, Vello, egui_plot e próprio, com licença e SBOM | F1 | P | Comparativo medido nos mesmos casos | Dependência grande entrar no motor |
+| F3 | Crate do núcleo: `Figure`, `Axes`, `Series` e artefato `katu.plot/1` | F1, C3 | M | Teste de contrato; artefato idêntico byte a byte | Estado global voltar pela conveniência |
+| F4 | Amostragem adaptativa, várias curvas, intervalos explícitos, faixa y robusta | F3 | M | Erro e contagem nos gabaritos | Custo por curva |
+| F5 | Classificação de quebras, função pública no katu-math | F4 | M | Sem ligação falsa em `1/x`, `tan(x)`, `abs(x)/x`; `sin(1/x)` sai `undersampled` | Nunca prometer detectar tudo |
+| F6 | Exportação SVG, JSON e CSV; temas e alternativa textual | F4 | M | XML válido, contraste, CSV igual ao JSON | Aparência depender de conferência humana |
+| F7 | Arandu: apresentar, zoom visual e zoom calculado | F5, F6 | M | Teste de contrato; indicação de desatualizado; conferência visual | Duplicar lógica na interface |
+| F8 | PNG, conforme F2 | F2, F6 | P | Compara com o SVG | Dependência de rasterização |
+| F9 | Escalas log e semilog, com domínio | F4 | P | Recusa em valor não positivo | Fora do primeiro recorte; fecha o marco |
+
+Interação além do zoom, 3D e GPU ficam para depois do marco.
 
 ## Ciclo G: uso como ferramenta (Fase 6)
 
@@ -108,13 +113,13 @@ C1 → C2 → C3 ─┼→ D1 → D2
               ├→ C8
 C4 → C5 → C6 → C7 → E1
      └→ C10 → C11      E2 → E3, E4; C6 → E5 → E6
-C3 → F1 → F2 → F3, F4, F5
+C3 → F1 → F2; F1 → F3 → F4 → F5, F6, F9; F5, F6 → F7; F6 → F8
 C3 → G1 → G2, G3; G4 → G5
 ```
 
 ## Resumo do esforço, sem paralelismo
 
-Somando as faixas: 12 tarefas P, 24 M e 6 G, ou cerca de 85 a 170 dias de trabalho de uma pessoa. As tarefas G concentram a
+Somando as faixas: 14 tarefas P, 26 M e 6 G, ou cerca de 90 a 180 dias de trabalho de uma pessoa. As tarefas G concentram a
 incerteza: C4, C6, C9, E2, E3 e G4. Essa soma é uma ordem de grandeza para decidir o próximo ciclo, não um prazo prometido, e
 será refeita ao fim do ciclo C.
 
