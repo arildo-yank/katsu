@@ -59,7 +59,7 @@ O Katu não tenta ser maior que o PyTorch. Tenta ser **pequeno o bastante para s
 | BF16 + Adam de 8 bits + recomputação levam o 1B de 21,9 GiB para 11,4 GiB de VRAM reservada | medido numa 4090 | `docs/v2-precisao-e-memoria-2026-10-28.md` |
 | O 1B cabe numa GPU de 12 GB (RTX 4070) | **estimativa**, no limite; nunca rodou numa 4070 | — |
 | Velocidade contra o PyTorch: no 134M numa 4090, mesmos lotes e mesmos pesos, o PyTorch foi 1,4× mais rápido em FP32 e 3,4× no seu melhor modo (BF16 + FlashAttention) contra o melhor do Katu na época (TF32); a perda do passo 1 coincide nos dois | medido, 26/10/2026, antes do BF16 do Katu | `docs/benchmarks/gpu-engine-2026-10-26/pytorch-2026-10-26/` |
-| Distância para o PyTorch com o BF16 atual do Katu | **não medido** | falta repetir o comparativo |
+| Distância para o PyTorch com o BF16 atual do Katu: 1,5× em FP32, 2,2× em TF32 e 3,2× em BF16, modo contra modo, no 134M numa 4090 | medido, 01/11/2026, duas rodadas por modo | `docs/benchmarks/pytorch-bf16-2026-11-01/README.md` |
 | O servidor aceita o formato da API da OpenAI (`/v1/chat/completions`, `/v1/models`): o cliente oficial funciona trocando só a `base_url`, e o que não há (stream, JSON mode, tools) é recusado com erro | medido, 31/10/2026, fora do Docker | `crates/katu-server/src/openai.rs` |
 | Isso cobre o formato, não a qualidade: o 134M é leitor de documentos (`/rag/*`), não chat geral. Numa primeira conferência, acertou 1 de 5 respostas com gabarito | medido, 31/10/2026, amostra pequena | `ARANDU/docs/INTEGRATION_GUIDE.md` |
 
@@ -100,10 +100,9 @@ próprio órgão.
 
 Em ordem:
 
-1. **Repetir o comparativo com o PyTorch** com o BF16 do Katu: o script já existe
-   (`scripts/bench_pytorch.py`, mesmos lotes e mesmos pesos). A medida de 26/10 deixou o Katu
-   3,4× atrás no melhor modo de cada um; falta saber quanto o BF16 fechou. ~15 minutos numa 4090,
-   menos de US$ 1. Até lá, a única afirmação de desempenho honesta é "mais lento que o PyTorch".
+1. **Reduzir a distância para o PyTorch:** com o BF16 do Katu, ela ainda é de 3,2× no melhor modo de cada um
+   (`docs/benchmarks/pytorch-bf16-2026-11-01/README.md`). Falta um perfil dos kernels, como o Nsight, para saber onde o tempo
+   se perde. Até lá, a única afirmação de desempenho honesta é "mais lento que o PyTorch".
 2. **Pacote de soberania:** feito em 31/10/2026 ([`soberania/`](soberania/README.md)). Falta
    comparar o build entre duas máquinas (macOS e Linux, ou dois Linux).
 3. **Uso por terceiros:** `pip install katu` a partir do `katu-python`, exemplos, documentação da

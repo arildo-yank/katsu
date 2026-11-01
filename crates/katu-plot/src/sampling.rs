@@ -531,6 +531,15 @@ fn parameters(request: &PlotRequest) -> Result<Vars, PlotError> {
     Ok(vars)
 }
 
+/// Sem "-0.0000" no texto: abaixo de quatro casas, o ponto é 0.
+fn shown_near(x: f64) -> f64 {
+    if x.abs() < 5e-5 {
+        0.0
+    } else {
+        x
+    }
+}
+
 fn alt_text(x: (f64, f64), series: &[SeriesOut]) -> String {
     let name = |kind: &str| match kind {
         "pole_suspected" => "polo suspeito",
@@ -552,7 +561,7 @@ fn alt_text(x: (f64, f64), series: &[SeriesOut]) -> String {
                     format!(
                         "{} perto de {:.4}",
                         name(&item.kind),
-                        (item.x_from + item.x_to) / 2.0
+                        shown_near((item.x_from + item.x_to) / 2.0)
                     )
                 })
                 .collect();

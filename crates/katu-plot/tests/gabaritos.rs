@@ -54,6 +54,8 @@ fn inverse_does_not_cross_its_pole() {
     assert!(art.series[0].segments[1].points.iter().all(|p| p[0] > 0.0));
     assert_eq!(art.axes.y.clipped, Some(true));
     assert_eq!(art.axes.y.y_auto.as_deref(), Some("robust"));
+    assert!(art.alt_text.contains("perto de 0.0000"), "{}", art.alt_text);
+    assert!(!art.alt_text.contains("-0.0000"), "{}", art.alt_text);
 }
 
 #[test]

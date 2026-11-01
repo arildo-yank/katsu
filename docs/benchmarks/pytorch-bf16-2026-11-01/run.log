@@ -1,0 +1,253 @@
+++ dirname deploy/cuda/runpod_bench_pytorch.sh
++ cd deploy/cuda/../..
++ OUT=/root/out
++ REPS=2
++ STEPS=100
++ BASE=runs/bench-base
++ TRAIN=data/sft/distill_arandu_10k.train.jsonl
++ EVAL=data/sft/distill_arandu_10k.eval.jsonl
++ mkdir -p /root/out
++ trap 'echo "$?" > "$OUT/EXIT_CODE"' EXIT
++ nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv
++ python3 -c 'import torch; print(torch.__version__, torch.version.cuda)'
++ git_rev=e4a2b6c
++ echo 'katu e4a2b6c'
++ command -v cargo
++ curl --proto =https --tlsv1.2 -sSf https://sh.rustup.rs
++ sh -s -- -y --profile minimal --default-toolchain 1.88.0
+info: downloading installer
+info: profile set to minimal
+info: default host tuple is x86_64-unknown-linux-gnu
+info: syncing channel updates for 1.88.0-x86_64-unknown-linux-gnu
+info: latest update on 2025-06-26 for version 1.88.0 (6b00bc388 2025-06-23)
+info: downloading 3 components
+info: default toolchain set to 1.88.0-x86_64-unknown-linux-gnu
+
+  1.88.0-x86_64-unknown-linux-gnu installed - rustc 1.88.0 (6b00bc388 2025-06-23)
+
+
+Rust is installed now. Great!
+
+To get started you may need to restart your current shell.
+This would reload your PATH environment variable to include
+Cargo's bin directory ($HOME/.cargo/bin).
+
+To configure your current shell, you need to source the
+corresponding env file under $HOME/.cargo.
+
+Consider running the right command for your shell (note the leading DOT):
+. "$HOME/.cargo/env" # For sh/ash/dash/pdksh/bash
+cargo:rerun-if-env-changed=CC_x86_64-unknown-linux-gnu
+CC_x86_64-unknown-linux-gnu = None
+cargo:rerun-if-env-changed=CC_x86_64_unknown_linux_gnu
+CC_x86_64_unknown_linux_gnu = None
+cargo:rerun-if-env-changed=HOST_CC
+HOST_CC = None
+cargo:rerun-if-env-changed=CC
+CC = None
+cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+CRATE_CC_NO_DEFAULTS = None
+cargo:rerun-if-env-changed=CFLAGS
+CFLAGS = None
+cargo:rerun-if-env-changed=HOST_CFLAGS
+HOST_CFLAGS = None
+cargo:rerun-if-env-changed=CFLAGS_x86_64_unknown_linux_gnu
+CFLAGS_x86_64_unknown_linux_gnu = None
+cargo:rerun-if-env-changed=CFLAGS_x86_64-unknown-linux-gnu
+CFLAGS_x86_64-unknown-linux-gnu = None
++ source /root/.cargo/env
+++ case ":${PATH}:" in
+++ export PATH=/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
+++ PATH=/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
++ command -v cc
++ export LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64:
++ LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64:
++ cargo build --release --locked -p katu-server --features cuda --bin train_sft
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded atomic-waker v1.1.2
+  Downloaded either v1.19.0
+  Downloaded cfg-if v1.0.5
+  Downloaded axum-core v0.5.6
+  Downloaded percent-encoding v2.3.2
+  Downloaded futures-task v0.3.34
+  Downloaded tokio-macros v2.7.2
+  Downloaded tower-layer v0.3.3
+  Downloaded serde_urlencoded v0.7.1
+  Downloaded tower-service v0.3.3
+  Downloaded itoa v1.0.18
+  Downloaded sync_wrapper v1.0.2
+  Downloaded http-body v1.1.0
+  Downloaded errno v0.3.14
+  Downloaded httpdate v1.0.3
+  Downloaded futures-core v0.3.34
+  Downloaded form_urlencoded v1.2.2
+  Downloaded slab v0.4.12
+  Downloaded quote v1.0.47
+  Downloaded mime v0.3.17
+  Downloaded crossbeam-deque v0.8.8
+  Downloaded zmij v1.0.23
+  Downloaded http-body-util v0.1.5
+  Downloaded signal-hook-registry v1.4.8
+  Downloaded pin-project-lite v0.2.17
+  Downloaded serde_path_to_error v0.1.20
+  Downloaded httparse v1.10.1
+  Downloaded crossbeam-epoch v0.9.21
+  Downloaded crossbeam-utils v0.8.23
+  Downloaded libloading v0.9.0
+  Downloaded once_cell v1.21.4
+  Downloaded smallvec v1.16.4
+  Downloaded matchit v0.8.4
+  Downloaded bytes v1.12.1
+  Downloaded serde_derive v1.0.229
+  Downloaded tracing-core v0.1.36
+  Downloaded ryu v1.0.23
+  Downloaded proc-macro2 v1.0.107
+  Downloaded unicode-ident v1.0.27
+  Downloaded socket2 v0.6.5
+  Downloaded log v0.4.34
+  Downloaded rayon-core v1.13.0
+  Downloaded serde_core v1.0.229
+  Downloaded memchr v2.8.3
+  Downloaded serde v1.0.229
+  Downloaded mio v1.2.4
+  Downloaded tower v0.5.3
+  Downloaded http v1.5.0
+  Downloaded hyper-util v0.1.21
+  Downloaded serde_json v1.0.154
+  Downloaded axum v0.8.6
+  Downloaded hyper v1.12.0
+  Downloaded futures-util v0.3.34
+  Downloaded rayon v1.12.0
+  Downloaded syn v3.0.9
+  Downloaded tracing v0.1.44
+  Downloaded cudarc v0.19.9
+  Downloaded libc v0.2.191
+  Downloaded tokio v1.54.1
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.27
+   Compiling quote v1.0.47
+   Compiling itoa v1.0.18
+   Compiling libc v0.2.191
+   Compiling pin-project-lite v0.2.17
+   Compiling serde_core v1.0.229
+   Compiling futures-core v0.3.34
+   Compiling bytes v1.12.1
+   Compiling crossbeam-utils v0.8.23
+   Compiling crossbeam-epoch v0.9.21
+   Compiling zmij v1.0.23
+   Compiling serde v1.0.229
+   Compiling crossbeam-deque v0.8.8
+   Compiling once_cell v1.21.4
+   Compiling httparse v1.10.1
+   Compiling serde_json v1.0.154
+   Compiling tracing-core v0.1.36
+   Compiling memchr v2.8.3
+   Compiling http v1.5.0
+   Compiling rayon-core v1.13.0
+   Compiling log v0.4.34
+   Compiling tower-service v0.3.3
+   Compiling tracing v0.1.44
+   Compiling syn v3.0.9
+   Compiling futures-task v0.3.34
+   Compiling smallvec v1.16.4
+   Compiling sync_wrapper v1.0.2
+   Compiling slab v0.4.12
+   Compiling atomic-waker v1.1.2
+   Compiling cudarc v0.19.9
+   Compiling tower-layer v0.3.3
+   Compiling percent-encoding v2.3.2
+   Compiling httpdate v1.0.3
+   Compiling cfg-if v1.0.5
+   Compiling futures-util v0.3.34
+   Compiling http-body v1.1.0
+   Compiling http-body-util v0.1.5
+   Compiling form_urlencoded v1.2.2
+   Compiling libloading v0.9.0
+   Compiling either v1.19.0
+   Compiling errno v0.3.14
+   Compiling socket2 v0.6.5
+   Compiling mio v1.2.4
+   Compiling signal-hook-registry v1.4.8
+   Compiling mime v0.3.17
+   Compiling ryu v1.0.23
+   Compiling axum-core v0.5.6
+   Compiling rayon v1.12.0
+   Compiling matchit v0.8.4
+   Compiling katu-math v0.1.0 (/root/katu/crates/katu-math)
+   Compiling serde_path_to_error v0.1.20
+   Compiling serde_derive v1.0.229
+   Compiling tokio-macros v2.7.2
+   Compiling katu-core v0.1.0 (/root/katu/crates/katu-core)
+   Compiling tokio v1.54.1
+   Compiling serde_urlencoded v0.7.1
+   Compiling katu-rag v0.1.0 (/root/katu/crates/katu-rag)
+   Compiling katu-plot v0.1.0 (/root/katu/crates/katu-plot)
+   Compiling hyper v1.12.0
+   Compiling tower v0.5.3
+   Compiling hyper-util v0.1.21
+   Compiling axum v0.8.6
+   Compiling katu-server v0.1.0 (/root/katu/crates/katu-server)
+    Finished `release` profile [optimized] target(s) in 1m 16s
++ BIN=target/release/train_sft
++ export KATU_INIT_RANDOM=1 KATU_ENGINE=gpu KATU_BACKEND=cuda KATU_BATCH=64 KATU_FUSED=1
++ KATU_INIT_RANDOM=1
++ KATU_ENGINE=gpu
++ KATU_BACKEND=cuda
++ KATU_BATCH=64
++ KATU_FUSED=1
++ export KATU_MEMORY_BUDGET_MIB=22528
++ KATU_MEMORY_BUDGET_MIB=22528
++ KATU_DUMP_BATCHES=/root/out/batches.jsonl
++ katu tiled64-dump tiled64 adam 0
++ local run=/root/out/katu-tiled64-dump-0
++ KATU_GEMM=tiled64
++ KATU_OPTIM=adam
++ target/release/train_sft runs/bench-base data/sft/distill_arandu_10k.train.jsonl data/sft/distill_arandu_10k.eval.jsonl data/sft/distill_arandu_10k.train.jsonl /root/out/katu-tiled64-dump-0 100 0 0.0003
++ WEIGHTS=/root/out/katu-tiled64-dump-0/migrated.ckpt
++ cp runs/bench-base/config.json /root/out/katu-tiled64-dump-0/config.json
+++ seq 1 2
++ for rep in $(seq 1 "$REPS")
++ katu tiled64 tiled64 adam 1
++ local run=/root/out/katu-tiled64-1
++ KATU_GEMM=tiled64
++ KATU_OPTIM=adam
++ target/release/train_sft runs/bench-base data/sft/distill_arandu_10k.train.jsonl data/sft/distill_arandu_10k.eval.jsonl data/sft/distill_arandu_10k.train.jsonl /root/out/katu-tiled64-1 100 0 0.0003
++ katu tf32 tf32 adam 1
++ local run=/root/out/katu-tf32-1
++ KATU_GEMM=tf32
++ KATU_OPTIM=adam
++ target/release/train_sft runs/bench-base data/sft/distill_arandu_10k.train.jsonl data/sft/distill_arandu_10k.eval.jsonl data/sft/distill_arandu_10k.train.jsonl /root/out/katu-tf32-1 100 0 0.0003
++ katu bf16 bf16 adam 1
++ local run=/root/out/katu-bf16-1
++ KATU_GEMM=bf16
++ KATU_OPTIM=adam
++ target/release/train_sft runs/bench-base data/sft/distill_arandu_10k.train.jsonl data/sft/distill_arandu_10k.eval.jsonl data/sft/distill_arandu_10k.train.jsonl /root/out/katu-bf16-1 100 0 0.0003
++ katu bf16-adam8 bf16 adam8 1
++ local run=/root/out/katu-bf16-adam8-1
++ KATU_GEMM=bf16
++ KATU_OPTIM=adam8
++ target/release/train_sft runs/bench-base data/sft/distill_arandu_10k.train.jsonl data/sft/distill_arandu_10k.eval.jsonl data/sft/distill_arandu_10k.train.jsonl /root/out/katu-bf16-adam8-1 100 0 0.0003
++ for mode in fp32 tf32 bf16
++ PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
++ python3 scripts/bench_pytorch.py /root/out/batches.jsonl --mode fp32 --weights /root/out/katu-tiled64-dump-0/migrated.ckpt --out /root/out/torch-fp32-1.json
++ for mode in fp32 tf32 bf16
++ PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
++ python3 scripts/bench_pytorch.py /root/out/batches.jsonl --mode tf32 --weights /root/out/katu-tiled64-dump-0/migrated.ckpt --out /root/out/torch-tf32-1.json
++ for mode in fp32 tf32 bf16
++ PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
++ python3 scripts/bench_pytorch.py /root/out/batches.jsonl --mode bf16 --weights /root/out/katu-tiled64-dump-0/migrated.ckpt --out /root/out/torch-bf16-1.json
++ for rep in $(seq 1 "$REPS")
++ katu tiled64 tiled64 adam 2
++ local run=/root/out/katu-tiled64-2
++ KATU_GEMM=tiled64
++ KATU_OPTIM=adam
++ target/release/train_sft runs/bench-base data/sft/distill_arandu_10k.train.jsonl data/sft/distill_arandu_10k.eval.jsonl data/sft/distill_arandu_10k.train.jsonl /root/out/katu-tiled64-2 100 0 0.0003
++ katu tf32 tf32 adam 2
++ local run=/root/out/katu-tf32-2
++ KATU_GEMM=tf32
++ KATU_OPTIM=adam
++ target/release/train_sft runs/bench-base data/sft/distill_arandu_10k.train.jsonl data/sft/distill_arandu_10k.eval.jsonl data/sft/distill_arandu_10k.train.jsonl /root/out/katu-tf32-2 100 0 0.0003
++ echo 1
+deploy/cuda/runpod_bench_pytorch.sh: line 1: /root/out/EXIT_CODE: No space left on device
