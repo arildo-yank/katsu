@@ -7,9 +7,9 @@ reiniciar nada. Retrato deste dia: conferir de novo antes de mudar o que depende
 
 | Rota | Depende do modelo | Consumidor conhecido | Regra |
 |---|---|---|---|
-| `POST /math` | Não | Arandu: `math_tool.py`, tela Matemática, ferramenta do DeepSeek | Preservar; recusa é HTTP 400 com `{"error"}` |
+| `POST /math` | Não | Nenhum no Arandu desde `e4e48d6` | Preservar por compatibilidade; recusa é HTTP 400 com `{"error"}` |
 | `POST /math/ask` | Não | Arandu: `api.py`, conversa | Preservar; `understood: false` manda seguir como conversa |
-| `POST /v1/compute` | Não | Nenhum ainda | Novo, `katu.result/1`; recusa é HTTP 200 |
+| `POST /v1/compute` | Não | Arandu: `math_tool.py`, tela Matemática, ferramenta do DeepSeek | `katu.result/1`; recusa é HTTP 200 |
 | `POST /generate` | Sim | Arandu, testes de medição | Fora deste trabalho |
 | `POST /rag/ask`, `/rag/search`, `/rag/documents` | Em parte | Arandu | Fora deste trabalho |
 | `GET /health` | | Arandu, app | Fora deste trabalho |
@@ -17,7 +17,7 @@ reiniciar nada. Retrato deste dia: conferir de novo antes de mudar o que depende
 
 O servidor só sobe com `config.json`, `tokenizer.bpe` e `model.ckpt` válidos, mesmo para responder contas (tarefa A6).
 
-## Campos de `/math` lidos pelos consumidores
+## Campos de `/math` lidos pelos consumidores até `e4e48d6`
 
 | Campo | Quem lê | Observação |
 |---|---|---|

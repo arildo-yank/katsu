@@ -8,13 +8,13 @@ recorte das fases 3 a 6, com aritmética exata, álgebra básica, cálculo já s
 
 | Tarefa | Estado |
 |---|---|
-| A1 | Feita: integrado em `feat/katsu-lm-v1`, sem push, compilado e no ar no `Arandu V2.app`, conferido em 01/11/2026. O binário anterior está em `katu-server.antes-2026-11-01` |
+| A1 | Feita: integrado em `feat/katsu-lm-v1`, sem push, e no ar nos dois apps, instalados em 01/11/2026 às 21:25 |
 | A2, A3 | Feitas: [KATU_INVENTARIO.md](KATU_INVENTARIO.md) |
 | B1, B4 | Feitas |
 | C1 | Feita em 01/11/2026: det zero e polo como `inconclusive`; registrada no contrato |
 | A7 | Feita e instalada |
 | C2, C3 | Feitas e integradas, sem consumidor ainda; o Arandu segue em `/math` |
-| G1 | Feita no código (ARANDU `e4e48d6`): `/api/math` e a ferramenta do modelo usam `/v1/compute`, e o chat responde exato. Testada numa API e num motor temporários, com a tela no navegador. **Falta instalar o app: a tela nova e a API nova precisam entrar juntas** |
+| G1 | Feita e instalada (ARANDU `e4e48d6` e `e2e62a1`): `/api/math` e a ferramenta do modelo usam `/v1/compute`, e o chat responde exato. Testada no app real em 01/11/2026. A ferramenta com o DeepSeek real não foi exercitada |
 | C4, C5, C7, C8 | Feitas e integradas (`ca84f08`), compiladas às 21:11 e no ar só na próxima abertura do app: `katu_math::exact`, `katu_math::budget`, modos em `/v1/compute`. C7 só em `eval`; C8 sem teto de memória |
 
 Medido neste ciclo: cerca de 10 minutos de relógio, com um agente assistido, e cerca de 1.140 linhas alteradas entre código,
