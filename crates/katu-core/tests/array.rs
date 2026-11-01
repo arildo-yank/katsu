@@ -295,3 +295,37 @@ fn bf16_matches_the_training_engine_conversion() {
     assert_eq!(sum.values_as::<f64>(), vec![3.0, -4.0]);
     assert!(sum.to_npy_bytes().is_err(), "bf16 não existe no .npy");
 }
+
+/// Produto de dimensões que estoura vira erro antes de existir um view com tamanho impossível.
+#[test]
+fn broadcast_refuses_shapes_whose_product_overflows() {
+    let one = NdArray::from_vec(vec![1.0f64], &[1, 1]).unwrap();
+    for shape in [
+        vec![usize::MAX, 2],
+        vec![1 << 32, 1 << 32],
+        vec![isize::MAX as usize + 1, 1],
+        vec![0, usize::MAX, usize::MAX],
+        vec![usize::MAX, usize::MAX, 0],
+    ] {
+        assert!(one.broadcast_to(&shape).is_err(), "{shape:?}");
+    }
+    assert_eq!(one.broadcast_to(&[1, 3]).unwrap().len(), 3);
+    assert_eq!(one.broadcast_to(&[0, 3]).unwrap().len(), 0);
+
+    let wide = one.broadcast_to(&[1 << 32, 1]).unwrap();
+    let tall = one.broadcast_to(&[1, 1 << 32]).unwrap();
+    assert!(wide.add(&tall).is_err());
+    assert!(wide.compare(&tall, Compare::Lt).is_err());
+}
+
+/// Eixos vazios com dimensões enormes: a soma das dimensões também é conferida.
+#[test]
+fn concatenate_refuses_a_sum_of_dimensions_that_overflows() {
+    let empty = NdArray::from_vec(Vec::<f64>::new(), &[1 << 62, 0]).unwrap();
+    let many = [&empty, &empty, &empty, &empty];
+    assert!(NdArray::concatenate(&many, 0).is_err());
+    assert_eq!(
+        NdArray::concatenate(&many[..2], 1).unwrap().shape(),
+        &[1 << 62, 0]
+    );
+}

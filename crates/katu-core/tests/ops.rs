@@ -264,3 +264,43 @@ fn adam_trains_a_softmax_classifier() -> Result<()> {
     )?;
     Ok(())
 }
+
+/// Tensor vazio pode ter dimensão enorme; a soma delas não pode estourar nem dar a volta.
+#[test]
+fn concat_of_empty_tensors_refuses_an_overflowing_sum() {
+    let huge = Tensor::zeros(&[usize::MAX, 0]).unwrap();
+    let parts = [huge.clone(), huge.clone()];
+    assert!(matches!(
+        Tensor::concat(&parts, 0),
+        Err(TensorError::ShapeOverflow)
+    ));
+    let other = Tensor::zeros(&[0, usize::MAX]).unwrap();
+    let parts = [other.clone(), other.clone()];
+    assert!(matches!(
+        Tensor::concat(&parts, 1),
+        Err(TensorError::ShapeOverflow)
+    ));
+    let one = Tensor::zeros(&[1, 0]).unwrap();
+    assert!(matches!(
+        Tensor::concat(&[huge.clone(), one], 0),
+        Err(TensorError::ShapeOverflow)
+    ));
+    let joined = Tensor::concat(&[huge.clone(), Tensor::zeros(&[0, 0]).unwrap()], 0).unwrap();
+    assert_eq!(joined.shape(), &[usize::MAX, 0]);
+    // Lado a lado: nada para copiar, então nada de percorrer usize::MAX linhas.
+    let side = Tensor::concat(&[huge.clone(), huge], 1).unwrap();
+    assert_eq!(side.shape(), &[usize::MAX, 0]);
+}
+
+/// Dimensões enormes que só existem por causa de um zero também não podem derrubar o broadcast.
+#[test]
+fn broadcast_of_empty_tensors_does_not_overflow_strides() {
+    let a = Tensor::zeros(&[0, usize::MAX, usize::MAX]).unwrap();
+    assert_eq!(a.add(&a).unwrap().numel(), 0);
+    let b = Tensor::zeros(&[1, usize::MAX, usize::MAX]);
+    assert!(b.is_err());
+    let scalar = Tensor::zeros(&[1]).unwrap();
+    assert_eq!(a.add(&scalar).unwrap().numel(), 0);
+    let wider = Tensor::zeros(&[2, 1, 1, 1]).unwrap();
+    assert_eq!(a.add(&wider).unwrap().numel(), 0);
+}

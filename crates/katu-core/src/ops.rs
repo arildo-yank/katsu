@@ -47,6 +47,10 @@ pub(crate) fn broadcast_map(out: &[usize], input: &[usize]) -> Result<Option<Vec
     if out == input {
         return Ok(None);
     }
+    let count = element_count(out)?;
+    if count == 0 {
+        return Ok(Some(Vec::new()));
+    }
     let offset = out.len() - input.len();
     // Stride 0 nas dimensões ausentes ou expandidas.
     let mut strides = vec![0; out.len()];
@@ -57,7 +61,6 @@ pub(crate) fn broadcast_map(out: &[usize], input: &[usize]) -> Result<Option<Vec
         }
         stride *= input[k];
     }
-    let count = element_count(out)?;
     let mut map = Vec::new();
     map.try_reserve_exact(count)?;
     let mut index = vec![0; out.len()];
@@ -379,7 +382,10 @@ impl Tensor {
         if parts.iter().any(|p| p.shape()[1 - axis] != fixed) {
             return Err(TensorError::ShapeMismatch);
         }
-        let joined = parts.iter().map(|p| p.shape()[axis]).sum::<usize>();
+        let joined = parts
+            .iter()
+            .try_fold(0usize, |n, p| n.checked_add(p.shape()[axis]))
+            .ok_or(TensorError::ShapeOverflow)?;
         let shape = if axis == 0 {
             vec![joined, fixed]
         } else {
@@ -389,12 +395,13 @@ impl Tensor {
             return resident_concat(parts, axis, &shape);
         }
         let mut data = Vec::new();
-        data.try_reserve_exact(element_count(&shape)?)?;
+        let count = element_count(&shape)?;
+        data.try_reserve_exact(count)?;
         if axis == 0 {
             for part in parts {
                 data.extend_from_slice(part.data());
             }
-        } else {
+        } else if count > 0 {
             for row in 0..fixed {
                 for part in parts {
                     let width = part.shape()[1];
