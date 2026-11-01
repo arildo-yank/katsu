@@ -1,6 +1,6 @@
 # Contrato de resultados do Katu e primeiro recorte exato
 
-Data: 01/11/2026. Estado: seções 1 a 6 implementadas em `POST /v1/compute`, ainda sem consumidor; os modos exatos valem só para `eval`. Unidades (seção 7) sem implementação. Revisão da tarefa C1 parcial. Detalha a seção 4 do
+Data: 01/11/2026. Estado: seções 1 a 6 implementadas em `POST /v1/compute`, ainda sem consumidor; os modos exatos valem só para `eval`. Unidades (seção 7) sem implementação. Detalha a seção 4 do
 [plano do motor computacional](KATU_MOTOR_COMPUTACIONAL_PLAN.md). Exemplos JSON são normativos quanto aos campos;
 valores são ilustrativos, exceto na tabela de gabaritos.
 
@@ -19,7 +19,10 @@ valores são ilustrativos, exceto na tabela de gabaritos.
 - **01/11/2026, pelo usuário:** `det` igual a zero em ponto flutuante é `inconclusive`, porque pede análise de condicionamento
   e não prova singularidade. Já era o comportamento de `/v1/compute`; `/math` segue devolvendo `0`, por compatibilidade.
 - **01/11/2026, pelo usuário:** aprovada a implementação dos tipos exatos (C4 e C5).
-- **Pendente:** o restante do contrato, em especial polo como `inconclusive` e os limites da seção 6.
+- **01/11/2026, pelo usuário:** polo também é `inconclusive`, nunca número real ou infinito. Tarefa C1 encerrada. Limites da
+  seção 6 seguem como estão e podem mudar com medição.
+- `inconclusive` em `det` diz que falta análise, mas o motor ainda não a faz: não há SVD nem estimativa de condicionamento em
+  `det` (tarefa D1). Quem recebe esse estado não deve chamar a matriz de singular nem de regular.
 
 ## 2. Envelope
 
