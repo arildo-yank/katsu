@@ -8,10 +8,11 @@ recorte das fases 3 a 6, com aritmética exata, álgebra básica, cálculo já s
 
 | Tarefa | Estado |
 |---|---|
-| A1 | Parte feita: integrado em `feat/katsu-lm-v1` (`02fdf77`), sem push, e compilado em `target/release/katu-server`. O binário anterior está em `katu-server.antes-2026-11-01`. **Falta abrir de novo o app e conferir a 8792.** Ela estava fechada porque os dois apps a dividem: ver a tarefa A7, com código pronto (ARANDU `b934966`) e apps compilados, ainda não instalados |
+| A1 | Feita: integrado em `feat/katsu-lm-v1`, sem push, compilado e no ar no `Arandu V2.app`, conferido em 01/11/2026. O binário anterior está em `katu-server.antes-2026-11-01` |
 | A2, A3 | Feitas: [KATU_INVENTARIO.md](KATU_INVENTARIO.md) |
 | B1, B4 | Feitas |
 | C1 | **Pendente de revisão humana.** C2 e C3 aplicam o contrato como versão provisória |
+| A7 | Feita e instalada |
 | C2, C3 | Feitas e integradas, sem consumidor ainda; o Arandu segue em `/math` |
 
 Medido neste ciclo: cerca de 10 minutos de relógio, com um agente assistido, e cerca de 1.140 linhas alteradas entre código,
@@ -40,7 +41,7 @@ fim de cada ciclo, comparando com o previsto. Nenhuma tarefa daqui pede GPU, tre
 | A3 | Inventário, por leitura, dos processos que dependem do checkout | | P | Lista conferida com `lsof` e `ps` | Mudar enquanto o piloto roda |
 | A4 | Matriz de testes com versões e hardware; primeira execução do CI no Linux x86 | A1 | P | Execução verde registrada | Push exige autorização, repositório público |
 | A5 | Casos Arandu↔Katu reais com servidor temporário, em script | | M | Script no ARANDU, sem rede externa | Servidor pede checkpoint para subir mesmo só para contas |
-| A7 | App sobe o Katu de novo quando a 8792 cai, e registra em arquivo o motivo de não subir | | P | Teste do laço; fechar o outro app não derruba as contas por mais que alguns segundos | Dois apps disputarem a porta; reinstalar pede permissão de volume |
+| A7 | Feita (ARANDU `b934966`). O app sobe o Katu de novo quando a 8792 cai e registra em `data/logs`. Medido nos apps instalados: 25 s após derrubar o servidor; 6 s e 5 s na troca de dono entre os dois apps | | P | Teste do laço e os três testes no app real | Dois apps ao mesmo tempo com a porta fechada carregam o modelo os dois; um sai |
 | A6 | Separar o serviço matemático do carregamento do modelo | A2 | M | Rota `/math` sobe sem checkpoint e sem 540 MB | Muda inicialização; preservar a atual |
 
 ## Ciclo B: lacunas achadas na Fase 1

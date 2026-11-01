@@ -55,9 +55,10 @@ recusa assíntotas também em `katu.root`.
   `KATU_MODEL_DIR`, lidos do `.env`. Por isso **uma compilação em `KATSU/target/release` muda o que o app executa na próxima
   abertura**. A worktree isolada compila em `KATSU-motor-fase1/target`, para isso não acontecer por acidente.
 
-**Dois apps, uma porta.** `Arandu.app` (API 8766) e `Arandu V2.app` (API 8767) sobem o Katu na mesma 8792. `spawn_katu` só roda
-ao abrir e não faz nada se a porta já responde. Quem abriu primeiro fica dono do servidor e o derruba ao fechar; o outro não o
-sobe de novo e as contas passam a falhar. O app também não guarda log disso, porque o `eprintln!` não vai para lugar nenhum.
+**Dois apps, uma porta.** `Arandu.app` (API 8766) e `Arandu V2.app` (API 8767) sobem o Katu na mesma 8792. O app vigia a porta
+enquanto o app está aberto e deixa em paz um servidor que já responde. Quem abriu primeiro fica dono do servidor e o derruba ao
+fechar; o outro assume em cerca de 5 segundos, medidos nos apps instalados em 01/11/2026 (ARANDU `b934966`). Log em
+`ARANDU/data/logs/arandu-app-<porta da API>.log`.
 
 ## Processos em 01/11/2026, 20:05
 
