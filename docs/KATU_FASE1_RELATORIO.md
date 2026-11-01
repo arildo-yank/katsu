@@ -119,10 +119,10 @@ Fora dos seis defeitos; viraram tarefas em [KATU_MARCO1_TAREFAS.md](KATU_MARCO1_
 
 | ID | Observado | Tarefa |
 |---|---|---|
-| L1 | **Newton devolve assíntota como raiz:** `1/x` a partir de 1 dá `1099511627776`, `exp(-x)` dá `28`. Mesma classe do defeito 1, ainda em produção | B1 |
+| L1 | **Newton devolvia assíntota como raiz:** `1/x` a partir de 1 dava `1099511627776`, `exp(-x)` dava `28`. Corrigido em `feat/motor-contrato-v1`, ainda sem integrar | B1, feita |
 | L2 | `0^0` retorna `1` sem declarar a convenção | B2 |
 | L3 | O LaTeX arredonda a entrada mostrada: `1.000000000000001` aparece como `1` | B3 |
-| L4 | `inv` diz "singular" também para matriz apenas quase singular | B4 |
+| L4 | `inv` dizia "singular" também para matriz apenas quase singular. Corrigido na mesma branch | B4, feita |
 | L5 | Autograd de concat vazio com dimensão enorme percorreria as linhas. Não testado com `backward`; deixado para depois do piloto | B5 |
 | L6 | Integral num polo recusa com "não convergiu": correto, mas sem diagnóstico | B6 |
 | L7 | O servidor precisa de checkpoint válido só para responder contas | A6 |

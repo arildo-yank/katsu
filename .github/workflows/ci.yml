@@ -20,8 +20,9 @@ jobs:
       - run: cargo clippy -p katu-core --all-targets -- -D warnings
       - run: cargo test -p katu-math --locked
       - run: cargo clippy -p katu-math --all-targets -- -D warnings
-      # A rota /math de ponta a ponta: é o contrato de integração que o Arandu usa.
+      # As rotas /math e /v1/compute: o contrato de integração que o Arandu usa e o novo.
       - run: cargo test -p katu-server --locked math::
+      - run: cargo test -p katu-server --locked compute::
       - run: cargo run -p katu-core --release --example conv2d
       - run: cargo run -p katu-core --example train
       - run: cargo check -p katu-python --locked

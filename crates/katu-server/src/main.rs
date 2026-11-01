@@ -16,6 +16,7 @@ use std::{
 };
 use tokio::sync::Semaphore;
 mod calc;
+mod compute;
 mod evidence;
 mod grounding;
 mod math;
@@ -520,6 +521,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/models", get(openai::models))
         .route("/math", post(math::handle))
         .route("/math/ask", post(math::ask))
+        .route("/v1/compute", post(compute::handle))
         .layer(DefaultBodyLimit::max(32768))
         .route(
             "/rag/documents",

@@ -4,6 +4,20 @@ Data: 01/11/2026. Marco definido na Fase 6 do [plano](KATU_MOTOR_COMPUTACIONAL_P
 recorte das fases 3 a 6, com aritmética exata, álgebra básica, cálculo já suportado corrigido, unidades básicas, gráficos
 2D e integração validada. Contrato em [KATU_CONTRATO_RESULTADOS.md](KATU_CONTRATO_RESULTADOS.md).
 
+## Estado do primeiro ciclo
+
+| Tarefa | Estado |
+|---|---|
+| A1 | Parte feita: Fase 1 integrada em `feat/katsu-lm-v1` (`71e2863`), sem push. **Falta compilar e levar ao app**, sem autorização ainda |
+| A2, A3 | Feitas: [KATU_INVENTARIO.md](KATU_INVENTARIO.md) |
+| B1, B4 | Feitas |
+| C1 | **Pendente de revisão humana.** C2 e C3 aplicam o contrato como versão provisória |
+| C2, C3 | Feitas, sem consumidor ainda; o Arandu segue em `/math` |
+
+Medido neste ciclo: cerca de 10 minutos de relógio, com um agente assistido, e cerca de 1.140 linhas alteradas entre código,
+testes e script. Estimado para o ciclo, nas faixas abaixo: B1 e B4 P, C2 e C3 M, cerca de 5 a 10 dias de uma pessoa. A diferença não
+vale para o resto: foi troca mecânica e envelope sobre contas prontas, sem matemática nova. C4 e C6 são a próxima medida útil.
+
 ## Como ler as estimativas
 
 Esforço em dias de trabalho concentrado de uma pessoa experiente na área: **P** até 1, **M** de 2 a 4, **G** de 5 a 10.
@@ -32,10 +46,10 @@ fim de cada ciclo, comparando com o previsto. Nenhuma tarefa daqui pede GPU, tre
 
 | ID | Tarefa | Depende | Esforço | Evidência | Risco |
 |---|---|---|---|---|---|
-| B1 | Newton aceita assíntota como raiz (`1/x`, `exp(-x)`) | | P | Regressão; comparação com SciPy | Recusar raiz verdadeira achatada |
+| B1 | Feita. Newton aceitava assíntota como raiz (`1/x`, `exp(-x)`) | | P | Regressão; comparação com SciPy | Raiz muito íngreme ainda é recusada |
 | B2 | Convenção de `0^0` declarada ou recusada em `/math` | C1 | P | Teste e nota | Quebrar consumidor |
 | B3 | LaTeX não pode arredondar a entrada: `1.000000000000001` aparece como `1` | | P | Teste de ida e volta | Layout |
-| B4 | Mensagem distinta para matriz quase singular e singular | C2 | P | Teste | Baixo |
+| B4 | Feita. Código e mensagem próprios para matriz quase singular | C2 | P | Teste | Baixo |
 | B5 | Autograd de concat vazio com dimensão enorme não pode percorrer as linhas | Fim do piloto | P | Teste com `backward` | Caminho de treino; só depois do piloto |
 | B6 | Integral: diagnóstico de polo em vez de "não convergiu" | C2 | M | Casos com polo, salto e imprópria | Falsos positivos |
 

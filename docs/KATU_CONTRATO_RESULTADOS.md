@@ -1,6 +1,8 @@
 # Contrato de resultados do Katu e primeiro recorte exato
 
-Data: 01/11/2026. Estado: especificação, ainda sem implementação. Detalha a seção 4 do
+Data: 01/11/2026. Estado: seções 1 a 5 implementadas em `POST /v1/compute` sobre as operações atuais, como versão provisória
+até a revisão da tarefa C1; seções 6 a 8 ainda sem implementação, salvo o modo `exact`, que por enquanto só aceita contas em
+inteiros e recusa o resto. Detalha a seção 4 do
 [plano do motor computacional](KATU_MOTOR_COMPUTACIONAL_PLAN.md). Exemplos JSON são normativos quanto aos campos;
 valores são ilustrativos, exceto na tabela de gabaritos.
 
@@ -20,36 +22,35 @@ valores são ilustrativos, exceto na tabela de gabaritos.
 {
   "schema": "katu.result/1",
   "status": "success",
-  "nature": "exact",
-  "request": {"op": "eval", "expr": "1/3 + 1/6", "mode": "exact"},
+  "nature": "numeric",
+  "request": {"op": "root", "expr": "x^2 - 2", "from": 0, "to": 2},
   "content": {
-    "interpreted": "1/3 + 1/6",
-    "interpreted_latex": "\\frac{1}{3} + \\frac{1}{6}",
-    "value": {"kind": "rational", "num": "1", "den": "2"},
-    "value_latex": "\\frac{1}{2}",
-    "decimal_preview": {"text": "0.5", "exact": true},
-    "unit": null,
-    "domain": null,
-    "assumptions": [],
-    "parameters": {}
+    "interpreted": "x^2 - 2",
+    "interpreted_latex": "x^{2} - 2",
+    "value": {"kind": "number", "value": 1.4142135623724243},
+    "value_latex": "1{,}4142135624",
+    "parameters": {"from": 0, "to": 2, "var": "x"}
   },
   "evidence": {
-    "method": "aritmética racional exata",
-    "tolerance_requested": null,
-    "error_observed": null,
-    "checks": [{"kind": "exact_arithmetic", "detail": "sem arredondamento"}]
+    "method": "Bisseção",
+    "error_observed": {"kind": "residual", "value": 1.9e-12},
+    "checks": [{"kind": "sign_change_and_decay", "detail": "troca de sinal, com |f| caindo junto com o intervalo"}]
   },
-  "provenance": {"engine": "katu-math", "engine_version": "0.1.0", "git": "<commit>"},
+  "provenance": {"engine": "katu-math", "engine_version": "0.1.0"},
   "steps": [],
-  "warnings": [],
-  "usage": {"elapsed_us": 12, "limit_hit": null}
+  "warnings": [{"code": "other_roots_possible", "message": "Uma raiz do intervalo; pode haver outras."}],
+  "usage": {"elapsed_us": 54}
 }
 ```
+
+`content.value.kind` é `number`, `expression`, `matrix` ou `vector`; com o tipo exato, entram `integer` e `rational`, com os
+dígitos em texto. `steps` e `warnings` estão sempre presentes, mesmo vazios. Reservados para etapas seguintes: `unit`,
+`domain`, `assumptions`, `decimal_preview`, `provenance.git`, `usage.limit_hit`.
 
 Quando `status` não é `success`, `content.value` é omitido e o campo `refusal` é obrigatório:
 
 ```json
-{"code": "pole_or_jump", "message": "a função troca de sinal perto de x = 0.1 sem passar por zero", "where": {"x": 0.1}, "retry": null}
+{"code": "pole_or_jump", "message": "a função troca de sinal perto de x = 0.1 sem passar por zero: polo ou salto, não raiz"}
 ```
 
 ## 3. Vocabulários fechados
@@ -62,7 +63,7 @@ Quando `status` não é `success`, `content.value` é omitido e o campo `refusal
 | `invalid_input` | O pedido não tem sentido ou está fora do domínio | `1/0`, `ln(-1)`, `m + s` |
 | `clarification_needed` | Mais de uma leitura muda o resultado; `refusal.options` lista as leituras | `20 °C + 5 °C` |
 | `unsupported` | Pedido válido, fora do que o motor sabe fazer | `∫exp(-x²)dx` em forma fechada |
-| `inconclusive` | O método rodou e não permite afirmar | matriz sem pivô distinguível do arredondamento |
+| `inconclusive` | O método rodou e não permite afirmar | polo na bisseção, Newton sem convergir, matriz sem pivô distinguível do arredondamento |
 | `resource_limit` | Passou de tempo, memória, tamanho ou profundidade; `usage.limit_hit` diz qual | `2^(10^9)` |
 | `data_unavailable` | Depende de dado que falta. Inclui variável sem valor; depois, fonte fora do ar | `x + 1` sem `x` |
 
@@ -81,6 +82,7 @@ Quando `status` não é `success`, `content.value` é omitido e o campo `refusal
 | Valor | Afirma | Não afirma |
 |---|---|---|
 | `exact_arithmetic` | Nenhuma operação arredondou | Correção da interpretação |
+| `domain_check` | A função original está definida no ponto | Que a derivada exista ali, além do que a conta mostrar |
 | `symbolic_proof` | Regras rastreáveis levam da entrada ao resultado, com condições | Validade fora das condições |
 | `substitution` | Conferido em N pontos, com folga declarada | Identidade em todos os pontos |
 | `numeric_residual` | Resíduo observado de tamanho R | Distância até a solução verdadeira |
@@ -94,11 +96,12 @@ qualificador.
 
 ### `refusal.code`, primeiro conjunto
 
-`parse_error`, `domain_error`, `division_by_zero`, `pole_or_jump`, `no_sign_change`, `not_converged`, `singular_matrix`,
-`near_singular_matrix`, `not_representable`, `dimension_mismatch`, `ambiguous_temperature`, `unknown_unit`,
-`no_closed_form`, `missing_variable`, `exact_mode_unavailable`, `limit_time`, `limit_memory`, `limit_size`, `limit_depth`.
+`parse_error`, `invalid_argument`, `domain_error`, `division_by_zero`, `missing_variable`, `pole_or_jump`, `no_sign_change`,
+`not_converged`, `singular_matrix`, `near_singular_matrix`, `not_representable`, `no_closed_form`, `exact_mode_unavailable`,
+`verification_failed`, `limit_size`, `limit_depth`, `limit_evaluations`. Previstos para etapas seguintes: `dimension_mismatch`,
+`ambiguous_temperature`, `unknown_unit`, `limit_time`, `limit_memory`.
 
-Hoje o motor devolve `Result<_, String>`; o código precisa virar erro tipado (tarefa C2 da decomposição).
+Definidos em `katu_math::ErrorCode`, que também diz o `status` de cada código.
 
 ## 4. Como as operações atuais se encaixam
 
@@ -107,11 +110,11 @@ Hoje o motor devolve `Result<_, String>`; o código precisa virar erro tipado (t
 | `eval` só com inteiros abaixo de 2^53 | `exact` | `exact_arithmetic` |
 | `eval` nos demais casos | `numeric` | nenhuma |
 | `derive` sem ponto | `symbolic` | nenhuma automática |
-| Valor de `derive` em ponto | `exact` ou `numeric`, em `value_nature` | domínio da função original |
+| Valor de `derive` em ponto | `exact` ou `numeric`, em `content.value_at.nature` | `domain_check` |
 | `antiderivative` | `symbolic` | `substitution` em até 7 pontos, mínimo 3, folga relativa 1e-7 |
 | `integrate` | `numeric` | nenhuma; Simpson adaptativo, a tolerância pedida não é garantia |
 | `root` por intervalo | `numeric` | `sign_change_and_decay` |
-| `root` por Newton | `numeric` | `numeric_residual` (ver lacuna L1 no relatório da Fase 1) |
+| `root` por Newton | `numeric` | `numeric_residual`, com \|f\| e passo pequenos |
 | `ode` | `numeric` | nenhuma; passo fixo, sem estimativa de erro |
 | `det`, `inv`, `matmul`, `dot`, `cross` | `numeric` | `inv` deve incluir `numeric_residual` |
 
@@ -121,9 +124,10 @@ compatibilidade.
 
 ## 5. Passos e visualização
 
-**Passos.** Cada passo vem de uma regra executada, nunca do modelo:
-`{"rule": "power_rule", "from": "x^3", "to": "x^4 / 4", "conditions": ["n != -1"]}`. Concatenar os passos precisa
-reproduzir o resultado; a suíte confere. Sem passos rastreáveis, `steps` fica vazio.
+**Passos.** Cada passo vem de uma regra executada, nunca do modelo. Hoje: `{"rule": "term_by_term", "latex": "..."}`, um por
+termo da soma, sem prova do encadeamento. Alvo da tarefa E6:
+`{"rule": "power_rule", "from": "x^3", "to": "x^4 / 4", "conditions": ["n != -1"]}`, com a suíte conferindo que concatenar os
+passos reproduz o resultado. Sem passos rastreáveis, `steps` fica vazio.
 
 **Visualização.** O contrato de gráficos é do katu-plot: [KATU_PLOT_CONTRATO.md](KATU_PLOT_CONTRATO.md). Segmentos separados
 são a forma de não ligar um polo com uma reta falsa. O núcleo gera a geometria; o renderizador a apresenta.
