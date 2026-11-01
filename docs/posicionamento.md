@@ -12,6 +12,29 @@ porque `katsu` já era um pacote de outra pessoa no PyPI, e porque o projeto pas
 línguas indígenas brasileiras, como o modelo Arandu ("sabedoria", em tupi-guarani). O pedido de
 registro da marca no INPI ainda não foi feito.
 
+## Katu e Arandu: as duas camadas
+
+**O Katu é a tecnologia; o Arandu é o produto.**
+
+| | Katu (o motor) | Arandu (o assistente) |
+|---|---|---|
+| O que é | Infraestrutura de IA em Rust | App e API para quem trabalha com documentos |
+| Peças | Núcleo de tensores e autograd, GEMM próprio, CUDA e BF16, `katu-math`, busca na biblioteca (`katu-rag`), `katu-server` e o pacote Python `katu` | App desktop, usuários com papéis, filtro de dados pessoais, roteamento entre motores, trilha de auditoria encadeada e medidor de substituição |
+| Quem usa | Equipe técnica que integra IA no próprio sistema | Funcionário que faz perguntas |
+| Como se usa | HTTP (com rota compatível com a OpenAI) ou `import katu` | Pelo app |
+
+**Duas formas de comprar:**
+- **só o motor:** a empresa integra o Katu no próprio sistema e cuida da interface e das regras;
+- **o produto completo:** os funcionários usam o Arandu.
+
+**O que o Arandu faz hoje, com o Katu como motor (01/11/2026):**
+- responde perguntas sobre a biblioteca citando o trecho e a fonte;
+- faz contas pelo `katu-math`;
+- recusa dados pessoais;
+- tudo isso sem sair da máquina.
+
+**O que ele ainda não faz:** juntar vários documentos numa resposta escrita, ou entender um problema descrito com palavras. Isso exige um modelo que entenda o pedido. Hoje esse modelo é o DeepSeek, na nuvem, com o filtro de dados pessoais na frente. O modelo próprio de 1B ainda está em treino e não foi medido.
+
 ## Por que o Katu existe
 
 **Soberania.** Um motor de IA feito no Brasil, que um órgão ou empresa brasileira possa auditar
