@@ -8,7 +8,7 @@ recorte das fases 3 a 6, com aritmética exata, álgebra básica, cálculo já s
 
 | Tarefa | Estado |
 |---|---|
-| A1 | Parte feita: integrado em `feat/katsu-lm-v1` (`02fdf77`), sem push, e compilado em `target/release/katu-server`. O binário anterior está em `katu-server.antes-2026-11-01`. **Falta abrir de novo o app e conferir a 8792.** Ela estava fechada porque os dois apps a dividem: ver a tarefa A7 |
+| A1 | Parte feita: integrado em `feat/katsu-lm-v1` (`02fdf77`), sem push, e compilado em `target/release/katu-server`. O binário anterior está em `katu-server.antes-2026-11-01`. **Falta abrir de novo o app e conferir a 8792.** Ela estava fechada porque os dois apps a dividem: ver a tarefa A7, com código pronto (ARANDU `b934966`) e apps compilados, ainda não instalados |
 | A2, A3 | Feitas: [KATU_INVENTARIO.md](KATU_INVENTARIO.md) |
 | B1, B4 | Feitas |
 | C1 | **Pendente de revisão humana.** C2 e C3 aplicam o contrato como versão provisória |
