@@ -1,9 +1,14 @@
 //! Primitiva em forma fechada para as classes de função listadas em `integ`. O que não está nelas é
 //! recusado. Toda primitiva é conferida antes de sair: derivar o resultado precisa devolver a função.
-use super::{add, b, diff, div, eval, mul, neg, pow, uses, Expr, Func, Vars};
+use super::{add, b, diff, div, eval, mul, neg, pow, uses, ErrorCode, Expr, Func, MathError, Vars};
 use Expr::{Add, Call, Div, Mul, Neg, Num, Pow, Sub, Var};
 
-const UNKNOWN: &str = "ainda não sei escrever essa primitiva em forma fechada; com limites, a integral numérica funciona";
+fn unknown() -> MathError {
+    MathError::new(
+        ErrorCode::NoClosedForm,
+        "ainda não sei escrever essa primitiva em forma fechada; com limites, a integral numérica funciona",
+    )
+}
 
 /// Fração simples, para escrever x^4 / 4 em vez de 0.25 * x^4.
 /// A folga é relativa e cobre só o arredondamento: coeficiente pequeno não vira zero, nem 0.3000000001 vira 3/10.
@@ -38,14 +43,14 @@ fn constant(e: &Expr) -> Option<f64> {
 }
 
 /// O coeficiente `a` de um argumento linear a*x + b, sem o qual a regra da cadeia não se inverte.
-fn linear(g: &Expr, var: &str) -> Result<f64, String> {
+fn linear(g: &Expr, var: &str) -> Result<f64, MathError> {
     let slope = diff(g, var)?;
     if uses(&slope, var) {
-        return Err(UNKNOWN.into());
+        return Err(unknown());
     }
     match constant(&slope) {
         Some(a) if a != 0.0 => Ok(a),
-        _ => Err(UNKNOWN.into()),
+        _ => Err(unknown()),
     }
 }
 
@@ -58,7 +63,7 @@ fn power(c: f64, n: f64, x: &Expr) -> Expr {
 }
 
 /// Soma, constante vezes função, x^n, 1/x, sqrt(x), a^x, ln(x), e sin, cos e exp de argumento linear.
-fn integ(e: &Expr, var: &str, c: f64) -> Result<Expr, String> {
+fn integ(e: &Expr, var: &str, c: f64) -> Result<Expr, MathError> {
     let x = Var(var.to_owned());
     if !uses(e, var) {
         return Ok(match constant(e) {
@@ -81,23 +86,25 @@ fn integ(e: &Expr, var: &str, c: f64) -> Result<Expr, String> {
         },
         Div(a, d) if !uses(d, var) => match constant(d) {
             Some(k) if k != 0.0 => integ(a, var, c / k)?,
-            _ => return Err(UNKNOWN.into()),
+            _ => return Err(unknown()),
         },
         Div(a, d) if !uses(a, var) => {
-            let k = constant(a).ok_or(UNKNOWN)?;
+            let k = constant(a).ok_or_else(unknown)?;
             match &**d {
                 Var(_) => power(c * k, -1.0, &x),
                 Pow(base, n) if **base == x && !uses(n, var) => {
-                    power(c * k, -constant(n).ok_or(UNKNOWN)?, &x)
+                    power(c * k, -constant(n).ok_or_else(unknown)?, &x)
                 }
-                _ => return Err(UNKNOWN.into()),
+                _ => return Err(unknown()),
             }
         }
-        Pow(base, n) if **base == x && !uses(n, var) => power(c, constant(n).ok_or(UNKNOWN)?, &x),
+        Pow(base, n) if **base == x && !uses(n, var) => {
+            power(c, constant(n).ok_or_else(unknown)?, &x)
+        }
         Pow(base, n) if !uses(base, var) => {
             let k = constant(base)
                 .filter(|k| *k > 0.0 && *k != 1.0)
-                .ok_or(UNKNOWN)?;
+                .ok_or_else(unknown)?;
             let slope = linear(n, var)?;
             scaled(c / (slope * k.ln()), e.clone())
         }
@@ -114,7 +121,7 @@ fn integ(e: &Expr, var: &str, c: f64) -> Result<Expr, String> {
                 _ => scaled(c / a, Call(Func::Exp, g.clone())),
             }
         }
-        _ => return Err(UNKNOWN.into()),
+        _ => return Err(unknown()),
     })
 }
 
@@ -135,7 +142,7 @@ pub(super) fn free_names(e: &Expr, out: &mut Vec<String>) {
 }
 
 /// Maior soma de valores absolutos dos termos: a escala do arredondamento quando os termos se cancelam.
-fn magnitude(e: &Expr, vars: &Vars) -> Result<f64, String> {
+fn magnitude(e: &Expr, vars: &Vars) -> Result<f64, MathError> {
     match e {
         Add(a, c) | Sub(a, c) => Ok(magnitude(a, vars)? + magnitude(c, vars)?),
         Neg(a) => magnitude(a, vars),
@@ -145,7 +152,7 @@ fn magnitude(e: &Expr, vars: &Vars) -> Result<f64, String> {
 
 /// Deriva a primitiva e compara com a função em vários pontos. Sem isto, um erro de regra sairia como
 /// resposta. A folga é relativa à escala da própria função, sem parte absoluta: 1e-10 * x não passa por zero.
-fn confirm(e: &Expr, primitive: &Expr, var: &str) -> Result<(), String> {
+fn confirm(e: &Expr, primitive: &Expr, var: &str) -> Result<(), MathError> {
     let d = diff(primitive, var)?;
     let mut names = Vec::new();
     free_names(e, &mut names);
@@ -158,19 +165,25 @@ fn confirm(e: &Expr, primitive: &Expr, var: &str) -> Result<(), String> {
         if let (Ok(want), Ok(got)) = (eval(e, &vars), eval(&d, &vars)) {
             let scale = magnitude(e, &vars)?.max(magnitude(&d, &vars)?);
             if (want - got).abs() > 1e-7 * scale {
-                return Err("a primitiva não passou na conferência; prefiro não responder".into());
+                return Err(MathError::new(
+                    ErrorCode::VerificationFailed,
+                    "a primitiva não passou na conferência; prefiro não responder",
+                ));
             }
             checked += 1;
         }
     }
     if checked < 3 {
-        return Err("não foi possível conferir a primitiva; prefiro não responder".into());
+        return Err(MathError::new(
+            ErrorCode::VerificationFailed,
+            "não foi possível conferir a primitiva; prefiro não responder",
+        ));
     }
     Ok(())
 }
 
 /// Primitiva de `e` em relação a `var`, sem a constante de integração.
-pub fn antiderivative(e: &Expr, var: &str) -> Result<Expr, String> {
+pub fn antiderivative(e: &Expr, var: &str) -> Result<Expr, MathError> {
     let primitive = integ(e, var, 1.0)?;
     confirm(e, &primitive, var)?;
     Ok(primitive)
@@ -181,7 +194,7 @@ mod tests {
     use super::*;
     use crate::{latex::latex, parse};
 
-    fn primitive(text: &str) -> Result<String, String> {
+    fn primitive(text: &str) -> Result<String, MathError> {
         antiderivative(&parse(text).unwrap(), "x").map(|p| p.to_string())
     }
 

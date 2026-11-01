@@ -8,10 +8,12 @@
 
 use std::{collections::HashMap, fmt};
 
+mod error;
 mod integral;
 mod latex;
 pub mod linalg;
 mod prompt;
+pub use error::{ErrorCode, MathError};
 pub use integral::antiderivative;
 pub use latex::latex;
 pub use prompt::{understand, Intent};
@@ -75,9 +77,16 @@ fn b(e: Expr) -> Box<Expr> {
     Box::new(e)
 }
 
-pub fn parse(text: &str) -> Result<Expr, String> {
-    if text.trim().is_empty() || text.len() > MAX_LEN {
-        return Err("expressão vazia ou longa demais".into());
+fn fail<T>(code: ErrorCode, message: impl Into<String>) -> Result<T, MathError> {
+    Err(MathError::new(code, message))
+}
+
+pub fn parse(text: &str) -> Result<Expr, MathError> {
+    if text.trim().is_empty() {
+        return fail(ErrorCode::ParseError, "expressão vazia ou longa demais");
+    }
+    if text.len() > MAX_LEN {
+        return fail(ErrorCode::LimitSize, "expressão vazia ou longa demais");
     }
     let mut p = Parser {
         s: text.as_bytes(),
@@ -87,7 +96,10 @@ pub fn parse(text: &str) -> Result<Expr, String> {
     let e = p.sum()?;
     p.space();
     if p.i != p.s.len() {
-        return Err(format!("símbolo inesperado na posição {}", p.i + 1));
+        return fail(
+            ErrorCode::ParseError,
+            format!("símbolo inesperado na posição {}", p.i + 1),
+        );
     }
     Ok(e)
 }
@@ -112,14 +124,14 @@ impl Parser<'_> {
         }
         hit
     }
-    fn enter(&mut self) -> Result<(), String> {
+    fn enter(&mut self) -> Result<(), MathError> {
         self.depth += 1;
         if self.depth > MAX_DEPTH {
-            return Err("expressão aninhada demais".into());
+            return fail(ErrorCode::LimitDepth, "expressão aninhada demais");
         }
         Ok(())
     }
-    fn sum(&mut self) -> Result<Expr, String> {
+    fn sum(&mut self) -> Result<Expr, MathError> {
         let mut e = self.product()?;
         loop {
             if self.eat(b'+') {
@@ -131,7 +143,7 @@ impl Parser<'_> {
             }
         }
     }
-    fn product(&mut self) -> Result<Expr, String> {
+    fn product(&mut self) -> Result<Expr, MathError> {
         let mut e = self.unary()?;
         loop {
             if self.eat(b'*') {
@@ -144,7 +156,7 @@ impl Parser<'_> {
         }
     }
     /// O sinal vale menos que a potência: -x^2 é -(x^2), como na matemática.
-    fn unary(&mut self) -> Result<Expr, String> {
+    fn unary(&mut self) -> Result<Expr, MathError> {
         if self.eat(b'-') {
             self.enter()?;
             let e = Neg(b(self.unary()?));
@@ -154,7 +166,7 @@ impl Parser<'_> {
         self.power()
     }
     /// `^` associa à direita: 2^3^2 = 2^9.
-    fn power(&mut self) -> Result<Expr, String> {
+    fn power(&mut self) -> Result<Expr, MathError> {
         let base = self.atom()?;
         if self.eat(b'^') {
             self.enter()?;
@@ -164,13 +176,13 @@ impl Parser<'_> {
         }
         Ok(base)
     }
-    fn atom(&mut self) -> Result<Expr, String> {
+    fn atom(&mut self) -> Result<Expr, MathError> {
         self.enter()?;
         self.space();
         let e = if self.eat(b'(') {
             let e = self.sum()?;
             if !self.eat(b')') {
-                return Err("parêntese não fechado".into());
+                return fail(ErrorCode::ParseError, "parêntese não fechado");
             }
             e
         } else if self.s.get(self.i).is_some_and(u8::is_ascii_alphabetic) {
@@ -181,7 +193,7 @@ impl Parser<'_> {
         self.depth -= 1;
         Ok(e)
     }
-    fn word(&mut self) -> Result<Expr, String> {
+    fn word(&mut self) -> Result<Expr, MathError> {
         let start = self.i;
         while self
             .s
@@ -193,11 +205,16 @@ impl Parser<'_> {
         let name = std::str::from_utf8(&self.s[start..self.i]).unwrap_or("");
         self.space();
         if self.s.get(self.i) == Some(&b'(') {
-            let func = Func::parse(name).ok_or_else(|| format!("função desconhecida: {name}"))?;
+            let func = Func::parse(name).ok_or_else(|| {
+                MathError::new(
+                    ErrorCode::ParseError,
+                    format!("função desconhecida: {name}"),
+                )
+            })?;
             self.i += 1;
             let arg = self.sum()?;
             if !self.eat(b')') {
-                return Err("parêntese não fechado".into());
+                return fail(ErrorCode::ParseError, "parêntese não fechado");
             }
             return Ok(Call(func, b(arg)));
         }
@@ -207,7 +224,7 @@ impl Parser<'_> {
             _ => Var(name.to_owned()),
         })
     }
-    fn number(&mut self) -> Result<Expr, String> {
+    fn number(&mut self) -> Result<Expr, MathError> {
         let start = self.i;
         while self
             .s
@@ -220,19 +237,27 @@ impl Parser<'_> {
             .unwrap_or("")
             .parse::<f64>()
             .map(Num)
-            .map_err(|_| format!("número esperado na posição {}", start + 1))
+            .map_err(|_| {
+                MathError::new(
+                    ErrorCode::ParseError,
+                    format!("número esperado na posição {}", start + 1),
+                )
+            })
     }
 }
 
 pub type Vars = HashMap<String, f64>;
 
 /// Valor da expressão. Resultado não finito, divisão por zero e domínio inválido são erro, nunca número.
-pub fn eval(e: &Expr, vars: &Vars) -> Result<f64, String> {
+pub fn eval(e: &Expr, vars: &Vars) -> Result<f64, MathError> {
     let v = match e {
         Num(n) => *n,
-        Var(name) => *vars
-            .get(name)
-            .ok_or_else(|| format!("variável sem valor: {name}"))?,
+        Var(name) => *vars.get(name).ok_or_else(|| {
+            MathError::new(
+                ErrorCode::MissingVariable,
+                format!("variável sem valor: {name}"),
+            )
+        })?,
         Neg(a) => -eval(a, vars)?,
         Add(a, c) => eval(a, vars)? + eval(c, vars)?,
         Sub(a, c) => eval(a, vars)? - eval(c, vars)?,
@@ -240,7 +265,7 @@ pub fn eval(e: &Expr, vars: &Vars) -> Result<f64, String> {
         Div(a, c) => {
             let d = eval(c, vars)?;
             if d == 0.0 {
-                return Err("divisão por zero".into());
+                return fail(ErrorCode::DivisionByZero, "divisão por zero");
             }
             eval(a, vars)? / d
         }
@@ -253,15 +278,25 @@ pub fn eval(e: &Expr, vars: &Vars) -> Result<f64, String> {
                 Func::Tan => x.tan(),
                 Func::Exp => x.exp(),
                 Func::Abs => x.abs(),
-                Func::Ln if x <= 0.0 => return Err("logaritmo de número não positivo".into()),
+                Func::Ln if x <= 0.0 => {
+                    return fail(ErrorCode::DomainError, "logaritmo de número não positivo")
+                }
                 Func::Ln => x.ln(),
-                Func::Sqrt if x < 0.0 => return Err("raiz de número negativo".into()),
+                Func::Sqrt if x < 0.0 => {
+                    return fail(ErrorCode::DomainError, "raiz de número negativo")
+                }
                 Func::Sqrt => x.sqrt(),
             }
         }
     };
     if !v.is_finite() {
-        return Err("resultado não finito".into());
+        // NaN vem de fora do domínio, como (-8)^(1/3); infinito é um valor que não cabe em f64.
+        let code = if v.is_nan() {
+            ErrorCode::DomainError
+        } else {
+            ErrorCode::NotRepresentable
+        };
+        return fail(code, "resultado não finito");
     }
     Ok(v)
 }
@@ -359,7 +394,7 @@ fn uses(e: &Expr, var: &str) -> bool {
 }
 
 /// Derivada simbólica. Serve também como derivada parcial: as outras variáveis são constantes.
-pub fn diff(e: &Expr, var: &str) -> Result<Expr, String> {
+pub fn diff(e: &Expr, var: &str) -> Result<Expr, MathError> {
     Ok(match e {
         Num(_) => Num(0.0),
         Var(n) => Num(if n == var { 1.0 } else { 0.0 }),
@@ -409,7 +444,7 @@ pub fn diff(e: &Expr, var: &str) -> Result<Expr, String> {
 
 /// Confere o domínio de cada parte da expressão cujas variáveis têm valor. Parte com variável sem valor
 /// fica de fora: não dá para afirmar nada sobre ela, e a derivada parcial pode nem depender dela.
-fn defined(e: &Expr, vars: &Vars) -> Result<(), String> {
+fn defined(e: &Expr, vars: &Vars) -> Result<(), MathError> {
     let mut names = Vec::new();
     integral::free_names(e, &mut names);
     if names.iter().all(|n| vars.contains_key(n)) {
@@ -427,10 +462,15 @@ fn defined(e: &Expr, vars: &Vars) -> Result<(), String> {
 
 /// Valor da derivada num ponto. O domínio é o da função original: ln(x) deriva para 1/x, que existe em
 /// x = -1, mas ln(x) não existe ali e, portanto, não tem derivada.
-pub fn derivative_at(e: &Expr, var: &str, x: f64, vars: &Vars) -> Result<f64, String> {
+pub fn derivative_at(e: &Expr, var: &str, x: f64, vars: &Vars) -> Result<f64, MathError> {
     let mut env = vars.clone();
     env.insert(var.to_owned(), x);
-    defined(e, &env).map_err(|why| format!("a função não está definida em {var} = {x}: {why}"))?;
+    defined(e, &env).map_err(|why| {
+        MathError::new(
+            why.code,
+            format!("a função não está definida em {var} = {x}: {why}"),
+        )
+    })?;
     eval(&diff(e, var)?, &env)
 }
 
@@ -485,7 +525,7 @@ impl fmt::Display for Expr {
     }
 }
 
-fn at(e: &Expr, var: &str, x: f64, base: &Vars) -> Result<f64, String> {
+fn at(e: &Expr, var: &str, x: f64, base: &Vars) -> Result<f64, MathError> {
     let mut vars = base.clone();
     vars.insert(var.to_owned(), x);
     eval(e, &vars)
@@ -499,13 +539,13 @@ pub fn integrate(
     c: f64,
     tol: f64,
     vars: &Vars,
-) -> Result<f64, String> {
+) -> Result<f64, MathError> {
     fn simpson(fa: f64, fm: f64, fc: f64, h: f64) -> f64 {
         h / 6.0 * (fa + 4.0 * fm + fc)
     }
     #[allow(clippy::too_many_arguments)]
     fn rec(
-        f: &dyn Fn(f64) -> Result<f64, String>,
+        f: &dyn Fn(f64) -> Result<f64, MathError>,
         a: f64,
         c: f64,
         fa: f64,
@@ -514,7 +554,7 @@ pub fn integrate(
         whole: f64,
         tol: f64,
         depth: u32,
-    ) -> Result<f64, String> {
+    ) -> Result<f64, MathError> {
         let m = (a + c) / 2.0;
         let (lm, rm) = ((a + m) / 2.0, (m + c) / 2.0);
         let (flm, frm) = (f(lm)?, f(rm)?);
@@ -524,7 +564,10 @@ pub fn integrate(
             return Ok(left + right + delta / 15.0);
         }
         if depth == 0 {
-            return Err("a integral não convergiu na tolerância pedida".into());
+            return fail(
+                ErrorCode::NotConverged,
+                "a integral não convergiu na tolerância pedida",
+            );
         }
         Ok(rec(
             f,
@@ -549,13 +592,19 @@ pub fn integrate(
         )?)
     }
     if !a.is_finite() || !c.is_finite() || tol <= 0.0 {
-        return Err("limites e tolerância precisam ser finitos, com tolerância positiva".into());
+        return fail(
+            ErrorCode::InvalidArgument,
+            "limites e tolerância precisam ser finitos, com tolerância positiva",
+        );
     }
     let calls = std::cell::Cell::new(0usize);
     let f = |x: f64| {
         calls.set(calls.get() + 1);
         if calls.get() > MAX_INTEGRAL_CALLS {
-            return Err("a integral não convergiu dentro do limite de avaliações".to_owned());
+            return fail(
+                ErrorCode::LimitEvaluations,
+                "a integral não convergiu dentro do limite de avaliações",
+            );
         }
         at(e, var, x, vars)
     };
@@ -573,7 +622,7 @@ pub fn bisect(
     mut c: f64,
     tol: f64,
     vars: &Vars,
-) -> Result<f64, String> {
+) -> Result<f64, MathError> {
     // Dez metades estreitam o intervalo cerca de mil vezes; contínua de Hölder com expoente acima de
     // 0,1 cai mais que à metade nesse trecho, e |f| em polo ou salto nunca cai.
     const WINDOW: usize = 10;
@@ -587,7 +636,10 @@ pub fn bisect(
         return Ok(c);
     }
     if fa.signum() == fc.signum() {
-        return Err("a função não troca de sinal nesse intervalo".into());
+        return fail(
+            ErrorCode::NoSignChange,
+            "a função não troca de sinal nesse intervalo",
+        );
     }
     let first = fa.abs().max(fc.abs());
     let mut worst = vec![first];
@@ -613,33 +665,54 @@ pub fn bisect(
                 return Ok((a + c) / 2.0);
             }
             let near = (a + c) / 2.0;
-            return Err(format!(
-                "a função troca de sinal perto de {var} = {near} sem passar por zero: polo ou salto, não raiz"
-            ));
+            return fail(
+                ErrorCode::PoleOrJump,
+                format!("a função troca de sinal perto de {var} = {near} sem passar por zero: polo ou salto, não raiz"),
+            );
         }
     }
-    Err("a bisseção não convergiu".into())
+    fail(ErrorCode::NotConverged, "a bisseção não convergiu")
 }
 
 /// Raiz por Newton-Raphson, com a derivada simbólica. Recusa quando não converge, sem devolver palpite.
-pub fn newton(e: &Expr, var: &str, start: f64, tol: f64, vars: &Vars) -> Result<f64, String> {
+/// |f| pequeno não basta: em 1/x e exp(-x) ele cai enquanto x foge para longe. O passo também precisa
+/// ser pequeno, e zero exato precisa existir além do underflow do próprio ponto.
+pub fn newton(e: &Expr, var: &str, start: f64, tol: f64, vars: &Vars) -> Result<f64, MathError> {
+    const STEP: f64 = 1e-6;
     let d = diff(e, var)?;
     let mut x = start;
     for _ in 0..100 {
         let fx = at(e, var, x, vars)?;
-        if fx.abs() < tol {
-            return Ok(x);
+        if fx == 0.0 {
+            let h = STEP * x.abs().max(1.0);
+            let moved = [x - h, x + h]
+                .iter()
+                .any(|p| at(e, var, *p, vars).is_ok_and(|v| v != 0.0));
+            if moved {
+                return Ok(x);
+            }
+            return fail(
+                ErrorCode::NotConverged,
+                "a função é indistinguível de zero em toda a volta do ponto: não dá para afirmar uma raiz",
+            );
         }
         let slope = at(&d, var, x, vars)?;
         if slope == 0.0 {
-            return Err("derivada nula: o método de Newton não segue daqui".into());
+            return fail(
+                ErrorCode::NotConverged,
+                "derivada nula: o método de Newton não segue daqui",
+            );
         }
-        x -= fx / slope;
+        let step = fx / slope;
+        if fx.abs() < tol && step.abs() <= STEP * x.abs().max(1.0) {
+            return Ok(x);
+        }
+        x -= step;
         if !x.is_finite() {
-            return Err("o método de Newton divergiu".into());
+            return fail(ErrorCode::NotConverged, "o método de Newton divergiu");
         }
     }
-    Err("o método de Newton não convergiu".into())
+    fail(ErrorCode::NotConverged, "o método de Newton não convergiu")
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -653,9 +726,15 @@ pub fn rk4(
     t1: f64,
     steps: usize,
     vars: &Vars,
-) -> Result<f64, String> {
-    if steps == 0 || steps > 10_000_000 {
-        return Err("número de passos fora do limite".into());
+) -> Result<f64, MathError> {
+    if steps == 0 {
+        return fail(
+            ErrorCode::InvalidArgument,
+            "número de passos fora do limite",
+        );
+    }
+    if steps > 10_000_000 {
+        return fail(ErrorCode::LimitSize, "número de passos fora do limite");
     }
     let mut env = vars.clone();
     let mut call = |tv: f64, yv: f64| {
@@ -673,7 +752,7 @@ pub fn rk4(
         yv += h / 6.0 * (k1 + 2.0 * k2 + 2.0 * k3 + k4);
         tv = t0 + h * (i + 1) as f64;
         if !yv.is_finite() {
-            return Err("a solução divergiu".into());
+            return fail(ErrorCode::NotConverged, "a solução divergiu");
         }
     }
     Ok(yv)
@@ -690,7 +769,7 @@ mod tests {
     fn none() -> Vars {
         Vars::new()
     }
-    fn value(text: &str) -> Result<f64, String> {
+    fn value(text: &str) -> Result<f64, MathError> {
         eval(&parse(text)?, &none())
     }
     fn at_x(e: &Expr, x: f64) -> f64 {
@@ -964,5 +1043,59 @@ mod tests {
         assert_eq!(check("x^2 + ln(y)", 3.0), Ok(6.0));
         assert!(check("ln(x) + y", -1.0).is_err());
         assert!(check("x^2*y", 3.0).is_err(), "o resultado depende de y");
+    }
+
+    /// |f| pequeno com x fugindo é assíntota, não raiz.
+    #[test]
+    fn newton_refuses_asymptotes_as_roots() {
+        for (text, start) in [
+            ("1/x", 1.0),
+            ("1/x^2", 1.0),
+            ("exp(-x)", 1.0),
+            ("exp(-x)", 10000.0),
+            ("0.000000000000000000001", 0.0),
+        ] {
+            let got = newton(&parse(text).unwrap(), "x", start, 1e-12, &none());
+            assert!(got.is_err(), "{text} a partir de {start}: {got:?}");
+        }
+    }
+
+    #[test]
+    fn newton_keeps_true_roots() {
+        for (text, start, root) in [
+            ("x^2 - 2", 1.0, 2f64.sqrt()),
+            ("(x-1)^3", 3.0, 1.0),
+            ("x^2", 1.0, 0.0),
+            ("x^2", 0.0, 0.0),
+            ("cos(x)", 1.0, std::f64::consts::FRAC_PI_2),
+            ("0.00000000000000000001*(x-1)", 5.0, 1.0),
+            ("exp(x) - 1", 1.0, 0.0),
+        ] {
+            let got = newton(&parse(text).unwrap(), "x", start, 1e-12, &none());
+            let x = got.unwrap_or_else(|why| panic!("{text}: {why}"));
+            assert!((x - root).abs() < 1e-3, "{text}: {x}");
+        }
+    }
+
+    #[test]
+    fn refusals_carry_a_stable_code() {
+        let code = |text: &str| value(text).unwrap_err().code;
+        assert_eq!(code("1/0"), ErrorCode::DivisionByZero);
+        assert_eq!(code("ln(-1)"), ErrorCode::DomainError);
+        assert_eq!(code("(-8)^(1/3)"), ErrorCode::DomainError);
+        assert_eq!(code("9^9^9"), ErrorCode::NotRepresentable);
+        assert_eq!(code("x + 1"), ErrorCode::MissingVariable);
+        assert_eq!(code("2 +"), ErrorCode::ParseError);
+        assert_eq!(code("foo(1)"), ErrorCode::ParseError);
+        assert_eq!(code(&"1+".repeat(400)), ErrorCode::LimitSize);
+        assert_eq!(code(&"(".repeat(200)), ErrorCode::LimitDepth);
+        let root = |text: &str| bisect(&parse(text).unwrap(), "x", 0.0, 1.0, 1e-9, &none());
+        assert_eq!(root("1/(x-0.3)").unwrap_err().code, ErrorCode::PoleOrJump);
+        assert_eq!(root("x + 5").unwrap_err().code, ErrorCode::NoSignChange);
+        let ln = derivative_at(&parse("ln(x)").unwrap(), "x", -1.0, &none());
+        assert_eq!(ln.unwrap_err().code, ErrorCode::DomainError);
+        // O texto para a pessoa é o mesmo de antes do código.
+        assert_eq!(value("1/0").unwrap_err().to_string(), "divisão por zero");
+        assert_eq!(String::from(value("1/0").unwrap_err()), "divisão por zero");
     }
 }
