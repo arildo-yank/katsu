@@ -14,7 +14,7 @@ recorte das fases 3 a 6, com aritmética exata, álgebra básica, cálculo já s
 | C1 | **Pendente de revisão humana.** C2 e C3 aplicam o contrato como versão provisória |
 | A7 | Feita e instalada |
 | C2, C3 | Feitas e integradas, sem consumidor ainda; o Arandu segue em `/math` |
-| C4, C5, C7, C8 | Feitas em `feat/motor-exato`, ainda sem integrar: `katu_math::exact`, `katu_math::budget`, modos em `/v1/compute`. C7 só em `eval`; C8 sem teto de memória |
+| C4, C5, C7, C8 | Feitas e integradas (`ca84f08`), compiladas às 21:11 e no ar só na próxima abertura do app: `katu_math::exact`, `katu_math::budget`, modos em `/v1/compute`. C7 só em `eval`; C8 sem teto de memória |
 
 Medido neste ciclo: cerca de 10 minutos de relógio, com um agente assistido, e cerca de 1.140 linhas alteradas entre código,
 testes e script. Estimado para o ciclo, nas faixas abaixo: B1 e B4 P, C2 e C3 M, cerca de 5 a 10 dias de uma pessoa. A diferença não
