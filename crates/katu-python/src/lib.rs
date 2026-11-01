@@ -17,8 +17,8 @@ fn error(e: ArrayError) -> PyErr {
     }
 }
 
-fn math_error(e: String) -> PyErr {
-    PyValueError::new_err(e)
+fn math_error(e: katu_math::MathError) -> PyErr {
+    PyValueError::new_err(e.message)
 }
 
 fn dtype_from(name: &str) -> PyResult<DType> {

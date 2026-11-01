@@ -4,7 +4,7 @@ use axum::{extract::rejection::JsonRejection, http::StatusCode, Json};
 use katu_math::linalg::{self, Matrix};
 use katu_math::{
     antiderivative, bisect, derivative_at, diff, eval, exact_value, integrate, latex, newton,
-    parse, rk4, understand, Expr, Intent, Vars,
+    parse, rk4, understand, ErrorCode, Expr, Intent, MathError, Vars,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -86,7 +86,11 @@ fn default_tol() -> f64 {
     DEFAULT_TOL
 }
 
-fn expression(text: &str) -> Result<Expr, String> {
+fn invalid(message: impl Into<String>) -> MathError {
+    MathError::new(ErrorCode::InvalidArgument, message)
+}
+
+fn expression(text: &str) -> Result<Expr, MathError> {
     parse(text)
 }
 
@@ -178,7 +182,7 @@ fn linear(op: &str, input: String, result: Value, tex: String, method: &str) -> 
     json!({"op": op, "input": input.clone(), "input_latex": input, "result": result, "result_latex": tex, "method": method, "approximate": true, "note": ROUNDING})
 }
 
-fn solve(req: Request) -> Result<Value, String> {
+pub(super) fn solve(req: Request) -> Result<Value, MathError> {
     let none = Vars::new();
     match req {
         Request::Det { a } => {
@@ -287,7 +291,9 @@ fn solve(req: Request) -> Result<Value, String> {
             tol,
         } => {
             if !(MIN_TOL..=1.0).contains(&tol) {
-                return Err(format!("a tolerância precisa estar entre {MIN_TOL} e 1"));
+                return Err(invalid(format!(
+                    "a tolerância precisa estar entre {MIN_TOL} e 1"
+                )));
             }
             let e = expression(&expr)?;
             let value = integrate(&e, &var, from, to, tol, &none)?;
@@ -357,7 +363,9 @@ fn solve(req: Request) -> Result<Value, String> {
                         "A raiz encontrada depende do ponto de partida.".into(),
                     ))
                 }
-                _ => Err("informe um intervalo (from e to) ou um ponto de partida (guess)".into()),
+                _ => Err(invalid(
+                    "informe um intervalo (from e to) ou um ponto de partida (guess)",
+                )),
             }
         }
         Request::Ode {
@@ -368,8 +376,14 @@ fn solve(req: Request) -> Result<Value, String> {
             steps,
         } => {
             if steps == 0 || steps > MAX_ODE_STEPS {
-                return Err(format!(
-                    "o número de passos precisa estar entre 1 e {MAX_ODE_STEPS}"
+                let code = if steps == 0 {
+                    ErrorCode::InvalidArgument
+                } else {
+                    ErrorCode::LimitSize
+                };
+                return Err(MathError::new(
+                    code,
+                    format!("o número de passos precisa estar entre 1 e {MAX_ODE_STEPS}"),
                 ));
             }
             let e = expression(&expr)?;
@@ -387,7 +401,7 @@ fn solve(req: Request) -> Result<Value, String> {
 }
 
 /// Só para as operações sem LaTeX próprio: entrada e resultado do jeito que o motor calculou.
-fn add_latex(out: &mut Value) {
+pub(super) fn add_latex(out: &mut Value) {
     if out.get("result_latex").is_some() {
         return;
     }
@@ -413,7 +427,7 @@ fn latex_block(tex: &str) -> String {
 
 /// Resposta do pedido escrito, em Markdown com LaTeX, sempre mostrando o que foi entendido.
 fn explain(intent: Intent) -> Value {
-    let (understood, result): (String, Result<(String, bool, String), String>) = match intent {
+    let (understood, result): (String, Result<(String, bool, String), MathError>) = match intent {
         Intent::Calculate(e) => (
             latex(&e),
             eval(&e, &Vars::new()).map(|v| {
@@ -501,13 +515,13 @@ fn explain(intent: Intent) -> Value {
                 "Entendi assim:\n\n{}\n\nNão consegui calcular: {why}.\n\n{FOOTER}",
                 latex_block(&understood)
             );
-            json!({"understood": true, "ok": false, "markdown": markdown, "input_latex": understood, "error": why})
+            json!({"understood": true, "ok": false, "markdown": markdown, "input_latex": understood, "error": why.to_string()})
         }
     }
 }
 
 /// Procura uma troca de sinal em janelas crescentes em volta de zero e refina por bisseção.
-fn root_search(e: &Expr, var: &str) -> Result<f64, String> {
+fn root_search(e: &Expr, var: &str) -> Result<f64, MathError> {
     let none = Vars::new();
     let value = |x: f64| eval(e, &Vars::from([(var.to_owned(), x)]));
     let mut last: Option<(f64, f64)> = None;
@@ -536,7 +550,10 @@ fn root_search(e: &Expr, var: &str) -> Result<f64, String> {
         }
         last = value(x).ok().map(|v| (x, v));
     }
-    Err("não encontrei raiz real entre -100 e 100".into())
+    Err(MathError::new(
+        ErrorCode::NoSignChange,
+        "não encontrei raiz real entre -100 e 100",
+    ))
 }
 
 #[derive(Deserialize)]
@@ -559,7 +576,7 @@ pub(super) async fn ask(
     Ok(Json(out))
 }
 
-fn failure(code: StatusCode, message: &str) -> (StatusCode, Json<Value>) {
+pub(super) fn failure(code: StatusCode, message: &str) -> (StatusCode, Json<Value>) {
     (code, Json(json!({"error": message})))
 }
 
@@ -571,7 +588,7 @@ pub(super) async fn handle(
     let solved = tokio::task::spawn_blocking(move || solve(req))
         .await
         .map_err(|_| failure(StatusCode::INTERNAL_SERVER_ERROR, "math worker failed"))?;
-    let mut out = solved.map_err(|why| failure(StatusCode::BAD_REQUEST, &why))?;
+    let mut out = solved.map_err(|why| failure(StatusCode::BAD_REQUEST, &why.message))?;
     add_latex(&mut out);
     out["elapsed_us"] = json!(started.elapsed().as_micros() as u64);
     Ok(Json(out))
@@ -582,7 +599,9 @@ mod tests {
     use super::*;
 
     fn run(body: Value) -> Result<Value, String> {
-        solve(serde_json::from_value(body).map_err(|e| e.to_string())?)
+        Ok(solve(
+            serde_json::from_value(body).map_err(|e| e.to_string())?,
+        )?)
     }
 
     #[test]

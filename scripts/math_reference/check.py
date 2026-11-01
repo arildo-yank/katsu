@@ -112,6 +112,40 @@ def roots(base, t, rng, count):
         t.check("polo recusado", not ok, f"{text} [{a},{c}] {out}")
 
 
+def newton(base, t, rng, count):
+    for _ in range(count):
+        r = rng.uniform(-5, 5)
+        sign = "-" if r > 0 else "+"
+        text = f"(x {sign} {abs(r):.17f})*(x^2 + 1)"
+        f = lambda x: (x - r) * (x * x + 1)
+        fprime = lambda x: (x * x + 1) + (x - r) * 2 * x
+        start = r + rng.uniform(-1, 1)
+        want = optimize.newton(f, start, fprime=fprime, maxiter=200, tol=1e-13)
+        ok, out = call(base, op="root", expr=text, guess=start)
+        t.check("Newton x SciPy", ok and abs(out["result"] - want) < 1e-9, f"{text} de {start}: {out} != {want}")
+    for text in ("1/x", "1/x^2", "exp(-x)", "1/(x^2 + 1)"):
+        for _ in range(count // 20):
+            ok, out = call(base, op="root", expr=text, guess=rng.uniform(1, 50))
+            t.check("assíntota recusada", not ok, f"{text}: {out}")
+
+
+def contract(base, t):
+    """A rota nova tem de dar o mesmo número da antiga, e recusa em /v1 é HTTP 200 com código."""
+    def compute(**body):
+        request = urllib.request.Request(base.rstrip("/") + "/v1/compute", json.dumps(body).encode(), {"Content-Type": "application/json"})
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return json.load(response)
+
+    for body in (dict(op="eval", expr="sin(1)"), dict(op="det", a=[[1, 2], [3, 4]]), dict(op="root", expr="x^2 - 2", guess=1)):
+        old = call(base, **body)[1]["result"]
+        new = compute(**body)
+        t.check("/v1/compute = /math", new["status"] == "success" and new["content"]["value"]["value"] == old, f"{body}: {new}")
+    new = compute(op="eval", expr="1/0")
+    t.check("/v1/compute recusa com código", new["status"] == "invalid_input" and new["refusal"]["code"] == "division_by_zero", new)
+    new = compute(op="eval", expr="0.1 + 0.2", mode="exact")
+    t.check("/v1/compute recusa com código", new["status"] == "unsupported", new)
+
+
 def primitives(base, t, rng, count):
     for _ in range(count):
         c = rng.uniform(1, 9) * 10.0 ** rng.randint(-14, 12)
@@ -154,6 +188,8 @@ def main():
     determinants(args.base, t, rng, args.count)
     singular_matrices(args.base, t, rng, args.count // 5)
     roots(args.base, t, rng, args.count)
+    newton(args.base, t, rng, args.count)
+    contract(args.base, t)
     primitives(args.base, t, rng, args.count)
     derivatives(args.base, t, rng, args.count)
     print(f"NumPy {np.__version__}, semente {args.seed}")

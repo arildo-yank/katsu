@@ -1,46 +1,56 @@
 //! Álgebra linear densa, sem dependências: determinante, inversa, produto de matrizes, produtos escalar
 //! e vetorial. Em ponto flutuante: quase singular é recusado, em vez de devolver números enormes.
 
+use crate::{ErrorCode, MathError};
+
 pub type Matrix = Vec<Vec<f64>>;
 
 const MAX_SIZE: usize = 64;
 const SINGULAR: f64 = 1e-12;
 
-fn check(a: &Matrix) -> Result<(usize, usize), String> {
+fn invalid(message: impl Into<String>) -> MathError {
+    MathError::new(ErrorCode::InvalidArgument, message)
+}
+
+fn check(a: &Matrix) -> Result<(usize, usize), MathError> {
     let rows = a.len();
     let cols = a.first().map_or(0, Vec::len);
     if rows == 0 || cols == 0 {
-        return Err("a matriz está vazia".into());
+        return Err(invalid("a matriz está vazia"));
     }
     if rows > MAX_SIZE || cols > MAX_SIZE {
-        return Err(format!(
-            "matriz maior que o limite de {MAX_SIZE} por {MAX_SIZE}"
+        return Err(MathError::new(
+            ErrorCode::LimitSize,
+            format!("matriz maior que o limite de {MAX_SIZE} por {MAX_SIZE}"),
         ));
     }
     if a.iter().any(|r| r.len() != cols) {
-        return Err("as linhas da matriz têm tamanhos diferentes".into());
+        return Err(invalid("as linhas da matriz têm tamanhos diferentes"));
     }
     if a.iter().flatten().any(|v| !v.is_finite()) {
-        return Err("a matriz tem um valor não finito".into());
+        return Err(invalid("a matriz tem um valor não finito"));
     }
     Ok((rows, cols))
 }
 
-fn square(a: &Matrix) -> Result<usize, String> {
+fn square(a: &Matrix) -> Result<usize, MathError> {
     let (rows, cols) = check(a)?;
     if rows != cols {
-        return Err(format!(
+        return Err(invalid(format!(
             "a matriz precisa ser quadrada; esta é {rows} por {cols}"
-        ));
+        )));
     }
     Ok(rows)
 }
 
-fn finite(value: f64) -> Result<f64, String> {
+fn finite(value: f64) -> Result<f64, MathError> {
     if value.is_finite() {
         Ok(value)
     } else {
-        Err("resultado não finito".into())
+        Err(MathError::new(
+            ErrorCode::NotRepresentable,
+            "resultado não finito",
+        ))
     }
 }
 
@@ -99,7 +109,7 @@ fn best_pivot(m: &Matrix, col: usize) -> usize {
 /// indistinguível do arredondamento; determinante muito pequeno, mas distinguível, sai como valor. O que
 /// não cabe em f64 é recusado.
 #[allow(clippy::needless_range_loop)]
-pub fn det(a: &Matrix) -> Result<f64, String> {
+pub fn det(a: &Matrix) -> Result<f64, MathError> {
     let n = square(a)?;
     let (mut m, rows, cols) = balanced(a);
     let tiny = 8.0 * n as f64 * f64::EPSILON;
@@ -126,13 +136,16 @@ pub fn det(a: &Matrix) -> Result<f64, String> {
     }
     let value = finite(ldexp(mantissa, power))?;
     if value.abs() < f64::MIN_POSITIVE {
-        return Err("o determinante é pequeno demais para ponto flutuante".into());
+        return Err(MathError::new(
+            ErrorCode::NotRepresentable,
+            "o determinante é pequeno demais para ponto flutuante",
+        ));
     }
     Ok(value)
 }
 
 /// Gauss-Jordan com pivoteamento parcial, na matriz balanceada. Matriz singular, ou quase, é erro.
-pub fn inverse(a: &Matrix) -> Result<Matrix, String> {
+pub fn inverse(a: &Matrix) -> Result<Matrix, MathError> {
     let n = square(a)?;
     let (balanced, rows, cols) = balanced(a);
     let mut m: Matrix = balanced
@@ -146,8 +159,17 @@ pub fn inverse(a: &Matrix) -> Result<Matrix, String> {
         .collect();
     for col in 0..n {
         let pivot = best_pivot(&m, col);
+        if m[pivot][col] == 0.0 {
+            return Err(MathError::new(
+                ErrorCode::SingularMatrix,
+                "a matriz é singular: não tem inversa",
+            ));
+        }
         if m[pivot][col].abs() <= SINGULAR {
-            return Err("a matriz é singular: não tem inversa".into());
+            return Err(MathError::new(
+                ErrorCode::NearSingularMatrix,
+                "a matriz é quase singular: em ponto flutuante, a inversa não seria confiável",
+            ));
         }
         m.swap(pivot, col);
         let p = m[col][col];
@@ -170,7 +192,10 @@ pub fn inverse(a: &Matrix) -> Result<Matrix, String> {
         for (j, v) in row[n..].iter().enumerate() {
             let value = finite(ldexp(*v, -cols[i] - rows[j]))?;
             if value == 0.0 && *v != 0.0 {
-                return Err("a inversa tem valor pequeno demais para ponto flutuante".into());
+                return Err(MathError::new(
+                    ErrorCode::NotRepresentable,
+                    "a inversa tem valor pequeno demais para ponto flutuante",
+                ));
             }
             line.push(value);
         }
@@ -179,13 +204,13 @@ pub fn inverse(a: &Matrix) -> Result<Matrix, String> {
     Ok(out)
 }
 
-pub fn multiply(a: &Matrix, c: &Matrix) -> Result<Matrix, String> {
+pub fn multiply(a: &Matrix, c: &Matrix) -> Result<Matrix, MathError> {
     let (rows, inner) = check(a)?;
     let (other, cols) = check(c)?;
     if inner != other {
-        return Err(format!(
+        return Err(invalid(format!(
             "tamanhos incompatíveis: {rows} por {inner} vezes {other} por {cols}"
-        ));
+        )));
     }
     let out: Matrix = (0..rows)
         .map(|i| {
@@ -194,22 +219,24 @@ pub fn multiply(a: &Matrix, c: &Matrix) -> Result<Matrix, String> {
                 .collect()
         })
         .collect();
-    if out.iter().flatten().any(|v: &f64| !v.is_finite()) {
-        return Err("resultado não finito".into());
+    for value in out.iter().flatten() {
+        finite(*value)?;
     }
     Ok(out)
 }
 
-pub fn dot(u: &[f64], v: &[f64]) -> Result<f64, String> {
+pub fn dot(u: &[f64], v: &[f64]) -> Result<f64, MathError> {
     if u.is_empty() || u.len() != v.len() {
-        return Err("os vetores precisam ter o mesmo tamanho".into());
+        return Err(invalid("os vetores precisam ter o mesmo tamanho"));
     }
     finite(u.iter().zip(v).map(|(a, c)| a * c).sum())
 }
 
-pub fn cross(u: &[f64], v: &[f64]) -> Result<Vec<f64>, String> {
+pub fn cross(u: &[f64], v: &[f64]) -> Result<Vec<f64>, MathError> {
     if u.len() != 3 || v.len() != 3 {
-        return Err("o produto vetorial pede dois vetores de 3 componentes".into());
+        return Err(invalid(
+            "o produto vetorial pede dois vetores de 3 componentes",
+        ));
     }
     let out = vec![
         u[1] * v[2] - u[2] * v[1],
@@ -369,6 +396,27 @@ mod tests {
         assert!(
             inverse(&vec![vec![1.0, 1.0], vec![1.0, 1.0 + 1e-15]]).is_err(),
             "quase singular"
+        );
+    }
+
+    #[test]
+    fn singular_and_near_singular_have_their_own_codes() {
+        let code = |a: Matrix| inverse(&a).unwrap_err().code;
+        assert_eq!(
+            code(vec![vec![1.0, 2.0], vec![2.0, 4.0]]),
+            ErrorCode::SingularMatrix
+        );
+        assert_eq!(
+            code(vec![vec![1.0, 1.0], vec![1.0, 1.0 + 1e-15]]),
+            ErrorCode::NearSingularMatrix
+        );
+        assert_eq!(
+            det(&vec![vec![1.0; 65]; 65]).unwrap_err().code,
+            ErrorCode::LimitSize
+        );
+        assert_eq!(
+            det(&vec![vec![1.0, 2.0]]).unwrap_err().code,
+            ErrorCode::InvalidArgument
         );
     }
 }
