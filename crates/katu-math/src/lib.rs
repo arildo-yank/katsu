@@ -1,7 +1,8 @@
 //! Motor de cálculo determinístico do Katu, sem dependências externas: expressões com variáveis,
 //! derivada simbólica, integral numérica, raízes e EDO por Runge-Kutta. Plano em
 //! `docs/KATU_MATH_PLAN.md`. Não executa código, não lê arquivos nem acessa a rede: o que está fora
-//! da gramática é recusado. Ângulos em radianos.
+//! da gramática é recusado. Ângulos em radianos. Determinístico não quer dizer exato: o valor numérico é
+//! f64, e só [`exact_value`] afirma que uma conta não arredondou.
 
 #![allow(clippy::redundant_guards)]
 
@@ -265,6 +266,43 @@ pub fn eval(e: &Expr, vars: &Vars) -> Result<f64, String> {
     Ok(v)
 }
 
+/// Abaixo de 2^53 todo inteiro é f64 distinto, e soma ou produto que caia aqui não foi arredondado.
+const EXACT_LIMIT: f64 = 9_007_199_254_740_992.0;
+
+fn whole(v: f64) -> Option<f64> {
+    (v.fract() == 0.0 && v.abs() < EXACT_LIMIT).then_some(v)
+}
+
+fn exact(e: &Expr, vars: &Vars) -> Option<f64> {
+    match e {
+        Num(n) => whole(*n),
+        Var(name) => whole(*vars.get(name)?),
+        Neg(a) => exact(a, vars).map(|v| -v),
+        Add(a, c) => whole(exact(a, vars)? + exact(c, vars)?),
+        Sub(a, c) => whole(exact(a, vars)? - exact(c, vars)?),
+        Mul(a, c) => whole(exact(a, vars)? * exact(c, vars)?),
+        Div(a, c) => {
+            let (n, d) = (exact(a, vars)?, exact(c, vars)?);
+            (d != 0.0 && n % d == 0.0).then(|| n / d)
+        }
+        Pow(a, c) => {
+            let (base, power) = (exact(a, vars)?, exact(c, vars)?);
+            if !(0.0..=64.0).contains(&power) {
+                return None;
+            }
+            (0..power as u32).try_fold(1.0, |v, _| whole(v * base))
+        }
+        Call(Func::Abs, a) => exact(a, vars).map(f64::abs),
+        Call(..) => None,
+    }
+}
+
+/// Verdadeiro só quando a conta inteira ficou em inteiros que cabem em f64, sem nenhum arredondamento.
+/// Conservador: 0.5 + 0.25 também é exata em binário, mas decimal de entrada em geral não é.
+pub fn exact_value(e: &Expr, vars: &Vars) -> bool {
+    exact(e, vars).is_some()
+}
+
 fn add(a: Expr, c: Expr) -> Expr {
     match (a, c) {
         (Num(x), Num(y)) => Num(x + y),
@@ -367,6 +405,33 @@ pub fn diff(e: &Expr, var: &str) -> Result<Expr, String> {
             mul(outer, diff(a, var)?)
         }
     })
+}
+
+/// Confere o domínio de cada parte da expressão cujas variáveis têm valor. Parte com variável sem valor
+/// fica de fora: não dá para afirmar nada sobre ela, e a derivada parcial pode nem depender dela.
+fn defined(e: &Expr, vars: &Vars) -> Result<(), String> {
+    let mut names = Vec::new();
+    integral::free_names(e, &mut names);
+    if names.iter().all(|n| vars.contains_key(n)) {
+        return eval(e, vars).map(|_| ());
+    }
+    match e {
+        Num(_) | Var(_) => Ok(()),
+        Neg(a) | Call(_, a) => defined(a, vars),
+        Add(a, c) | Sub(a, c) | Mul(a, c) | Div(a, c) | Pow(a, c) => {
+            defined(a, vars)?;
+            defined(c, vars)
+        }
+    }
+}
+
+/// Valor da derivada num ponto. O domínio é o da função original: ln(x) deriva para 1/x, que existe em
+/// x = -1, mas ln(x) não existe ali e, portanto, não tem derivada.
+pub fn derivative_at(e: &Expr, var: &str, x: f64, vars: &Vars) -> Result<f64, String> {
+    let mut env = vars.clone();
+    env.insert(var.to_owned(), x);
+    defined(e, &env).map_err(|why| format!("a função não está definida em {var} = {x}: {why}"))?;
+    eval(&diff(e, var)?, &env)
 }
 
 /// Precedência para escrever só os parênteses necessários.
@@ -498,7 +563,9 @@ pub fn integrate(
     rec(&f, a, c, fa, fm, fc, simpson(fa, fm, fc, c - a), tol, 40)
 }
 
-/// Raiz por bisseção num intervalo em que a função troca de sinal.
+/// Raiz por bisseção num intervalo em que a função troca de sinal. Troca de sinal não basta: polo e
+/// salto também trocam. Por isso |f| precisa cair junto com o intervalo antes de a raiz sair. Sinal de
+/// aviso, não prova: esta é uma amostragem finita, e uma função arbitrária pode enganar qualquer amostragem.
 pub fn bisect(
     e: &Expr,
     var: &str,
@@ -507,7 +574,12 @@ pub fn bisect(
     tol: f64,
     vars: &Vars,
 ) -> Result<f64, String> {
-    let (mut fa, fc) = (at(e, var, a, vars)?, at(e, var, c, vars)?);
+    // Dez metades estreitam o intervalo cerca de mil vezes; contínua de Hölder com expoente acima de
+    // 0,1 cai mais que à metade nesse trecho, e |f| em polo ou salto nunca cai.
+    const WINDOW: usize = 10;
+    // Abaixo disto o que resta é ruído de arredondamento de uma raiz verdadeira.
+    const NOISE: f64 = 1e-6;
+    let (mut fa, mut fc) = (at(e, var, a, vars)?, at(e, var, c, vars)?);
     if fa == 0.0 {
         return Ok(a);
     }
@@ -517,16 +589,33 @@ pub fn bisect(
     if fa.signum() == fc.signum() {
         return Err("a função não troca de sinal nesse intervalo".into());
     }
-    for _ in 0..200 {
+    let first = fa.abs().max(fc.abs());
+    let mut worst = vec![first];
+    for _ in 0..1200 {
         let m = (a + c) / 2.0;
-        let fm = at(e, var, m, vars)?;
-        if fm == 0.0 || (c - a).abs() / 2.0 < tol {
-            return Ok(m);
+        let exhausted = m == a || m == c;
+        if !exhausted {
+            let fm = at(e, var, m, vars)?;
+            if fm == 0.0 {
+                return Ok(m);
+            }
+            if fa.signum() == fm.signum() {
+                (a, fa) = (m, fm);
+            } else {
+                (c, fc) = (m, fm);
+            }
+            worst.push(fa.abs().max(fc.abs()));
         }
-        if fa.signum() == fm.signum() {
-            (a, fa) = (m, fm);
-        } else {
-            c = m;
+        if exhausted || ((c - a).abs() / 2.0 < tol && worst.len() > WINDOW) {
+            let last = worst[worst.len() - 1];
+            let before = worst[worst.len().saturating_sub(WINDOW + 1)];
+            if last <= NOISE * first || last < 0.5 * before {
+                return Ok((a + c) / 2.0);
+            }
+            let near = (a + c) / 2.0;
+            return Err(format!(
+                "a função troca de sinal perto de {var} = {near} sem passar por zero: polo ou salto, não raiz"
+            ));
         }
     }
     Err("a bisseção não convergiu".into())
@@ -770,5 +859,110 @@ mod tests {
         let vars = Vars::from([("g".to_owned(), 9.81), ("t".to_owned(), 5.0)]);
         close(eval(&parse("g * t").unwrap(), &vars).unwrap(), 49.05, 1e-12);
         assert!(value("g * t").is_err(), "sem os dados, recusa");
+    }
+
+    #[test]
+    fn exact_only_when_nothing_was_rounded() {
+        let is = |text: &str| exact_value(&parse(text).unwrap(), &none());
+        for text in [
+            "(12 + 8) * 3",
+            "6 / 3",
+            "2^10",
+            "-2^2",
+            "abs(-7)",
+            "9007199254740991",
+        ] {
+            assert!(is(text), "{text}");
+        }
+        for text in [
+            "0.1 + 0.2",
+            "1 / 3",
+            "15 / 100 * 2300",
+            "2^-1",
+            "pi",
+            "sqrt(4)",
+            "9007199254740992 + 1",
+            "3^40",
+            "x + 1",
+        ] {
+            assert!(!is(text), "{text}");
+        }
+    }
+
+    /// Troca de sinal só vira raiz se a função for de fato a zero: polo e salto são recusados.
+    #[test]
+    fn bisection_refuses_poles_and_jumps_as_roots() {
+        for (text, a, c) in [
+            ("1/(x-0.1)", 0.0, 1.0),
+            ("1/(x-0.3)^3", 0.0, 1.0),
+            ("-1000000/(x-0.7)", 0.0, 1.0),
+            ("0.000000001/(x-0.1)", 0.0, 1.0),
+            ("tan(x)", 1.0, 2.0),
+            ("abs(x-0.3)/(x-0.3)", 0.0, 1.0),
+            ("abs(x-0.3)/(x-0.3) + x", -2.0, 1.0),
+        ] {
+            let e = parse(text).unwrap();
+            let got = bisect(&e, "x", a, c, 1e-12, &none());
+            assert!(got.is_err(), "{text} em [{a}, {c}] devolveu {got:?}");
+        }
+        assert!(bisect(
+            &parse("1/(x-0.1)").unwrap(),
+            "x",
+            0.1 - 1e-14,
+            0.1 + 1e-14,
+            1e-12,
+            &none()
+        )
+        .is_err());
+    }
+
+    /// As raízes verdadeiras continuam: íngremes, achatadas, com ruído de arredondamento e de escala extrema.
+    #[test]
+    fn bisection_keeps_true_roots() {
+        for (text, a, c, root) in [
+            ("x^2 - 2", 0.0, 2.0, 2f64.sqrt()),
+            ("x^3 - 2*x - 5", 2.0, 3.0, 2.0945514815423265),
+            ("cos(x)", 1.0, 2.0, PI / 2.0),
+            ("100000000000000000000*(x-0.1)", 0.0, 1.0, 0.1),
+            ("0.000000000000000000001*(x-0.1)", 0.0, 1.0, 0.1),
+            ("(x-1)^9", 0.0, 3.0, 1.0),
+            (
+                "x^9-9*x^8+36*x^7-84*x^6+126*x^5-126*x^4+84*x^3-36*x^2+9*x-1",
+                0.0,
+                3.0,
+                1.0,
+            ),
+            ("abs(x-0.3)^0.5*(x-0.3)/abs(x-0.3)", 0.0, 1.0, 0.3),
+            ("x - 0.1", 0.1 - 1e-13, 0.1 + 1e-13, 0.1),
+        ] {
+            let e = parse(text).unwrap();
+            let got = bisect(&e, "x", a, c, 1e-12, &none());
+            let x = got.unwrap_or_else(|why| panic!("{text}: {why}"));
+            // O polinômio expandido só tem sinal confiável fora de uma faixa de ruído em volta da raiz.
+            let slack = if text.starts_with("x^9") { 0.1 } else { 1e-3 };
+            assert!((x - root).abs() < slack, "{text}: {x}");
+        }
+    }
+
+    /// A derivada num ponto só existe onde a função original está definida.
+    #[test]
+    fn derivative_at_a_point_respects_the_original_domain() {
+        let check = |text: &str, x: f64| derivative_at(&parse(text).unwrap(), "x", x, &none());
+        assert!(check("ln(x)", -1.0).is_err());
+        assert!(check("ln(x)", 0.0).is_err());
+        assert!(check("sqrt(x)", -4.0).is_err());
+        assert!(check("x^2/x", 0.0).is_err());
+        assert!(check("ln(x) + x^2", -1.0).is_err());
+        assert!(
+            check("ln(x)*0", -1.0).is_err(),
+            "o zero não apaga o domínio"
+        );
+        assert_eq!(check("ln(x)", 2.0), Ok(0.5));
+        assert_eq!(check("x^2", -3.0), Ok(-6.0));
+        // Parcial sem valor para y: a derivada não depende de y e o domínio de x segue conferido.
+        assert_eq!(check("x^2 + y", 3.0), Ok(6.0));
+        assert_eq!(check("x^2 + ln(y)", 3.0), Ok(6.0));
+        assert!(check("ln(x) + y", -1.0).is_err());
+        assert!(check("x^2*y", 3.0).is_err(), "o resultado depende de y");
     }
 }
