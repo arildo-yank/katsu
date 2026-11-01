@@ -1,7 +1,7 @@
 # katu-plot: contrato e primeiro recorte
 
-Data: 01/11/2026. Estado: especificação. **O katu-plot não existe e não está no workspace**; esta especificação não cria a
-crate nem autoriza criá-la. Detalha a Fase 5 e a seção 10 do [plano](KATU_MOTOR_COMPUTACIONAL_PLAN.md). Segue o
+Data: 01/11/2026. Estado: **primeiro recorte implementado** em `crates/katu-plot`, com a rota `POST /v1/plot` no katu-server
+e criação autorizada pelo usuário em 01/11/2026. A seção 11 registra as decisões e o que ficou de fora. Detalha a Fase 5 e a seção 10 do [plano](KATU_MOTOR_COMPUTACIONAL_PLAN.md). Segue o
 [contrato de resultados](KATU_CONTRATO_RESULTADOS.md) nos campos `status`, `refusal` e `warnings`.
 
 Nada aqui foi medido. Nenhuma afirmação de velocidade ou qualidade em relação a Matplotlib ou a outra biblioteca vale sem
@@ -208,3 +208,43 @@ de medição, nunca como dependência de produção.
 
 Tempo e memória por gráfico, número de avaliações, tamanho do SVG e tempo de renderização, nos mesmos casos e no mesmo
 hardware. Só depois disso comparar com outra biblioteca.
+
+Primeira medida, no Mac M, com a rota `/v1/plot` local, mediana de 7 pedidos, sem comparação com outra biblioteca:
+
+| Pedido | Tempo do pedido | Avaliações | Pontos | SVG |
+|---|---|---|---|---|
+| `x^2` | 0,5 ms | 401 | 401 | 7 KB |
+| `1/x` e `x^3` | 0,7 ms | 1.867 | 801 | 13 KB |
+| `tan(x)` | 0,7 ms | 3.251 | 584 | 10 KB |
+| `sin(1/x)` | 1,0 ms | 3.242 | 1.041 | 16 KB |
+| `sin(1/x)`, viewport de 4096 px | 3,2 ms | 7.767 | 4.280 | 67 KB |
+| 16 curvas `sin(1/x)` | 14,7 ms | 51.872 | 16.656 | 244 KB |
+
+## 11. Decisões da implementação
+
+| Tema | Decisão | Motivo |
+|---|---|---|
+| Organização | `crates/katu-plot`, com `katu-math`, `serde` e `serde_json`. Sem dependência gráfica | O núcleo não carrega renderizador |
+| API | `PlotRequest` é a fonte; `Figure` é só uma forma de escrevê-lo em código. Sem estado global | Um só caminho até o artefato |
+| Classificação | `katu_math::classify_bracket`, com o critério de queda de escala da bisseção | Gráfico e raiz não discordam sobre o mesmo polo |
+| Polo de mesmo sinal | Uma segunda busca persegue o maior \|f\| | `1/x^2` não muda de sinal, e a busca por diferença o perdia de vista |
+| SVG | Sai do núcleo, sem biblioteca | O plano já permitia. Tarefa F2 segue aberta para PNG e tela interativa |
+| Exportação | Campo opcional `formats` no pedido (`svg`, `csv`), com resposta em `content.svg` e `content.csv` | Acréscimo a este contrato: não muda o artefato nem o `request_hash` |
+| Rota | `POST /v1/plot`, no envelope `katu.result/1`; divide vagas e prazo de 2 s com `/v1/compute` | O contrato não definia o nome |
+| `request_hash` | SHA-256 próprio, conferido com vetores do NIST | Identifica o pedido, sem papel de segurança; evita dependência |
+
+**Acréscimos ao artefato:** a recusa por domínio de `ln(x)` em `[-1,0]` usa `domain_error`; `y_auto` é `"robust"` se algo ficou
+fora da faixa, e `"full"` se não; sai o aviso `empty_series` quando só uma das curvas não tem ponto.
+
+**Implementado e testado:** os gabaritos da seção 8, em `crates/katu-plot/tests/gabaritos.rs` e, contra o servidor real, em
+`ARANDU/katu-qt/tests/test_gui.py`, onde os pontos também são comparados com NumPy.
+
+**Limites conhecidos:**
+
+- Curva contínua muito íngreme, com detalhe abaixo da profundidade de subdivisão dentro da vista, sai como `undersampled`.
+- Um buraco isolado, como `x/x` em 0, só aparece se a amostragem cair nele; a linha passa por cima, e isso é parte do aviso
+  `finite_sampling`.
+- A legenda do SVG estima a largura do texto, porque SVG não mede texto.
+
+**Fora, por decisão:** PNG no motor (F2, F8), escalas log (F9), integração com o Arandu e uso como ferramenta do modelo
+(F7, seção 7), Python.

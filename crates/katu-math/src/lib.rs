@@ -15,11 +15,13 @@ mod integral;
 mod latex;
 pub mod linalg;
 mod prompt;
+mod singular;
 pub use error::{ErrorCode, MathError};
 pub use exact::{exact_eval, exact_eval_with, Int, Rational};
 pub use integral::antiderivative;
 pub use latex::latex;
 pub use prompt::{understand, Intent};
+pub use singular::{classify_bracket, Bracket, Verdict};
 
 const MAX_LEN: usize = 500;
 const MAX_DEPTH: usize = 48;
@@ -631,11 +633,7 @@ pub fn bisect(
     tol: f64,
     vars: &Vars,
 ) -> Result<f64, MathError> {
-    // Dez metades estreitam o intervalo cerca de mil vezes; contínua de Hölder com expoente acima de
-    // 0,1 cai mais que à metade nesse trecho, e |f| em polo ou salto nunca cai.
-    const WINDOW: usize = 10;
-    // Abaixo disto o que resta é ruído de arredondamento de uma raiz verdadeira.
-    const NOISE: f64 = 1e-6;
+    const WINDOW: usize = singular::SCALE_WINDOW;
     let (mut fa, mut fc) = (at(e, var, a, vars)?, at(e, var, c, vars)?);
     if fa == 0.0 {
         return Ok(a);
@@ -669,7 +667,7 @@ pub fn bisect(
         if exhausted || ((c - a).abs() / 2.0 < tol && worst.len() > WINDOW) {
             let last = worst[worst.len() - 1];
             let before = worst[worst.len().saturating_sub(WINDOW + 1)];
-            if last <= NOISE * first || last < 0.5 * before {
+            if singular::scale_falls(first, before, last) {
                 return Ok((a + c) / 2.0);
             }
             let near = (a + c) / 2.0;

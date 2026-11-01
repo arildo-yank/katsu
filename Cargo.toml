@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/katu-core", "crates/katu-math", "crates/katu-python", "crates/katu-rag", "crates/katu-server"]
+members = ["crates/katu-core", "crates/katu-math", "crates/katu-plot", "crates/katu-python", "crates/katu-rag", "crates/katu-server"]
 default-members = ["crates/katu-core"]
 resolver = "2"
 
@@ -11,6 +11,7 @@ license = "MIT"
 [workspace.dependencies]
 katu-core = { path = "crates/katu-core", version = "0.1.0" }
 katu-math = { path = "crates/katu-math", version = "0.1.0" }
+katu-plot = { path = "crates/katu-plot", version = "0.1.0" }
 katu-rag = { path = "crates/katu-rag", version = "0.1.0" }
 pyo3 = "0.29.3"
 

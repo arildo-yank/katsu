@@ -259,6 +259,15 @@ name = "katu-math"
 version = "0.1.0"
 
 [[package]]
+name = "katu-plot"
+version = "0.1.0"
+dependencies = [
+ "katu-math",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "katu-python"
 version = "0.1.0"
 dependencies = [
@@ -282,6 +291,7 @@ dependencies = [
  "axum",
  "katu-core",
  "katu-math",
+ "katu-plot",
  "katu-rag",
  "serde",
  "serde_json",

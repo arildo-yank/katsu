@@ -97,7 +97,7 @@ paridade.
 
 ## Ciclo F: katu-plot, gráficos 2D (Fase 5, primeiro recorte)
 
-Contrato em [KATU_PLOT_CONTRATO.md](KATU_PLOT_CONTRATO.md). A crate ainda não existe; criá-la depende de autorização.
+Contrato em [KATU_PLOT_CONTRATO.md](KATU_PLOT_CONTRATO.md). Em 01/11/2026: F1, F3, F4, F5 e F6 feitas, com autorização do usuário; a seção 11 do contrato tem as decisões. F2, F7, F8 e F9 seguem abertas. Sem commit até haver pedido.
 
 | ID | Tarefa | Depende | Esforço | Evidência | Risco |
 |---|---|---|---|---|---|

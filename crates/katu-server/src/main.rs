@@ -21,6 +21,7 @@ mod evidence;
 mod grounding;
 mod math;
 mod openai;
+mod plot;
 /// Sistema do formato de leitura (o mesmo do SFT de leitura e da régua de leitura).
 const READING_SYSTEM: &str = "Você é o Arandu. Responda em português do Brasil usando só o trecho.";
 const NO_DATA: &str = "Não tenho dados suficientes nos documentos para responder.";
@@ -522,6 +523,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/math", post(math::handle))
         .route("/math/ask", post(math::ask))
         .route("/v1/compute", post(compute::handle))
+        .route("/v1/plot", post(plot::handle))
         .layer(DefaultBodyLimit::max(32768))
         .route(
             "/rag/documents",

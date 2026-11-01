@@ -53,6 +53,14 @@ impl ErrorCode {
         }
     }
 
+    /// A conta falhou só neste ponto, por causa do valor: outro ponto da mesma expressão pode dar certo.
+    pub fn is_point_failure(self) -> bool {
+        matches!(
+            self,
+            ErrorCode::DomainError | ErrorCode::DivisionByZero | ErrorCode::NotRepresentable
+        )
+    }
+
     /// O `status` do contrato. O método falhar em afirmar não é o mesmo que o pedido estar errado.
     pub fn status(self) -> &'static str {
         match self {

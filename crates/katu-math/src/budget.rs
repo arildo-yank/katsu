@@ -48,7 +48,7 @@ pub fn with_budget<T>(
 }
 
 /// Erro se o prazo venceu ou a conta foi cancelada. Custa uma leitura do relógio com orçamento ativo.
-pub(crate) fn check() -> Result<(), MathError> {
+pub fn check() -> Result<(), MathError> {
     CURRENT.with(|current| {
         let current = current.borrow();
         let Some(budget) = current.as_ref() else {

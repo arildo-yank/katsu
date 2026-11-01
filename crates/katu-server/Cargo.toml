@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 katu-core.workspace = true
 katu-math.workspace = true
+katu-plot.workspace = true
 katu-rag.workspace = true
 axum = "=0.8.6"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "sync"] }

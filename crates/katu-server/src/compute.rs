@@ -20,9 +20,9 @@ use tokio::sync::{Semaphore, SemaphorePermit};
 
 const SCHEMA: &str = "katu.result/1";
 /// Prazo de uma conta. As partes sem conferência são limitadas pelos tamanhos máximos e levam até ~100 ms.
-const TIME_LIMIT: Duration = Duration::from_secs(2);
+pub(crate) const TIME_LIMIT: Duration = Duration::from_secs(2);
 /// Contas simultâneas: o pool de threads de bloqueio aceitaria centenas, e cada uma pode usar um núcleo.
-static SLOTS: Semaphore = Semaphore::const_new(4);
+pub(crate) static SLOTS: Semaphore = Semaphore::const_new(4);
 const PREVIEW_PLACES: u32 = 30;
 /// Literal mais longo que isto perderia dígitos no LaTeX, que passa por f64.
 const LATEX_MAX_DIGITS: usize = 15;
@@ -46,7 +46,7 @@ fn mode_of(body: &Value) -> Result<Mode, String> {
     }
 }
 
-fn base(request: &Value, status: &str, elapsed_us: u64) -> Map<String, Value> {
+pub(crate) fn base(request: &Value, status: &str, elapsed_us: u64) -> Map<String, Value> {
     let mut out = Map::new();
     out.insert("schema".into(), json!(SCHEMA));
     out.insert("status".into(), json!(status));
@@ -385,7 +385,7 @@ fn compute(prepared: Prepared, request: &Value) -> Value {
 }
 
 /// Marca a conta como cancelada se o pedido sumir antes do fim, como quando o cliente desiste.
-struct CancelOnDrop(Arc<AtomicBool>);
+pub(crate) struct CancelOnDrop(pub(crate) Arc<AtomicBool>);
 
 impl Drop for CancelOnDrop {
     fn drop(&mut self) {
@@ -393,7 +393,7 @@ impl Drop for CancelOnDrop {
     }
 }
 
-fn take_slot(slots: &'static Semaphore) -> Option<SemaphorePermit<'static>> {
+pub(crate) fn take_slot(slots: &'static Semaphore) -> Option<SemaphorePermit<'static>> {
     slots.try_acquire().ok()
 }
 
